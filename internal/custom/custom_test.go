@@ -359,3 +359,102 @@ func TestModelConfigUnitStrings(t *testing.T) {
 		t.Errorf("显式 false 经 Marshal/Unmarshal 回环后丢失（omitempty 需配指针类型）")
 	}
 }
+
+// TestValidateNormalizesCapSource 脏数据不得谎称「上游声明」（R119）：
+// cap_source 只认 api / user 两个字面值，野值与缺失一律归成 unknown。
+// 归一失守的后果是面板把猜测值标成上游口径（正是本轮要治的病），故 StaticModels
+// 的 ContextFromAPI/ContextFromUser 也在同一条里验。
+func TestValidateNormalizesCapSource(t *testing.T) {
+	c := ChannelConfig{
+		Name: "weird", BaseURL: "https://api.weird.com/v1",
+		Models: []ModelConfig{
+			{ID: "ok-api", ContextWindow: 1000, CapSource: CapSourceAPI},
+			{ID: "ok-user", ContextWindow: 2000, CapSource: CapSourceUser},
+			{ID: "wild", ContextWindow: 3000, CapSource: "upstream"}, // 手改/别家工具的野值
+			{ID: "bare", ContextWindow: 4000},                        // 缺失=老配置，同样不得冒充上游
+		},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	want := map[string]string{"ok-api": CapSourceAPI, "ok-user": CapSourceUser, "wild": CapSourceUnknown, "bare": CapSourceUnknown}
+	for _, m := range c.Models {
+		if w, ok := want[m.ID]; !ok {
+			t.Fatalf("多出模型 %q", m.ID)
+		} else if m.CapSource != w {
+			t.Fatalf("%s 的 cap_source = %q, want %q", m.ID, m.CapSource, w)
+		}
+	}
+	mi := New(c).StaticModels()
+	byID := map[string]struct{ api, user bool }{}
+	for _, x := range mi {
+		byID[x.ID] = struct{ api, user bool }{x.ContextFromAPI, x.ContextFromUser}
+	}
+	if !byID["ok-api"].api || byID["ok-api"].user {
+		t.Errorf("api 来源应只置 ContextFromAPI：%+v", byID["ok-api"])
+	}
+	if !byID["ok-user"].user || byID["ok-user"].api {
+		t.Errorf("user 来源应只置 ContextFromUser：%+v", byID["ok-user"])
+	}
+	for _, id := range []string{"wild", "bare"} {
+		if byID[id].api || byID[id].user {
+			t.Errorf("%s 的来源不合法，不得冒充任何声明：%+v", id, byID[id])
+		}
+	}
+}
+
+// TestShorthandModelsHaveNoCapSource 简写形态 `"models": ["id"]` 天生没有来源字段，
+// 归一后必须是 unknown（前端显「未探测」），不得因为「用户确实填了 ID」就冒充上游声明。
+func TestShorthandModelsHaveNoCapSource(t *testing.T) {
+	var c ChannelConfig
+	raw := []byte(`{"name":"short","base_url":"https://api.short.com/v1","models":["a","b"]}`)
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	for _, m := range c.Models {
+		if m.CapSource != CapSourceUnknown {
+			t.Fatalf("%s 简写形态的 cap_source = %q, want %q", m.ID, m.CapSource, CapSourceUnknown)
+		}
+		if m.HasAnyCap() {
+			t.Fatalf("%s 简写形态不该有任何能力信息却被判成「已探测」", m.ID)
+		}
+	}
+}
+
+// TestValidateNormalizesBaseURL 规范化必须挂在 ChannelConfig.Validate 上（R121）：面板录入
+// 与用户手改 config.json 都走这里（config.Normalize 逐渠道调 Validate）。只在前端治的话，
+// 手写的带尾巴地址会原样落盘，而本包内部一律拼 {BaseURL}/chat/completions
+// ⇒ 请求打到必死地址，报错还只有一句「连接失败」。
+func TestValidateNormalizesBaseURL(t *testing.T) {
+	ch := ChannelConfig{
+		Name:    "up1",
+		BaseURL: "  \"https://chat.example.com/v1/chat/completions/?access_token=SECRET#docs\"  ",
+	}
+	if err := ch.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if ch.BaseURL != "https://chat.example.com/v1" { // 引号、尾巴、query、fragment 全被治好
+		t.Fatalf("BaseURL = %q, want https://chat.example.com/v1", ch.BaseURL)
+	}
+	// 漏协议头的内网地址也要在 Validate 这层补齐（否则 url.Parse 判无 scheme 直接报错）
+	local := ChannelConfig{Name: "local", BaseURL: "127.0.0.1:11434/v1"}
+	if err := local.Validate(); err != nil {
+		t.Fatalf("Validate(local): %v", err)
+	}
+	if local.BaseURL != "http://127.0.0.1:11434/v1" {
+		t.Fatalf("内网地址应补 http：%q", local.BaseURL)
+	}
+	// 非法地址必须 Fail Early，不能带着坏配置继续跑
+	bad := ChannelConfig{Name: "bad"}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("空接入点应报错")
+	}
+	// 中间前缀段不得被猜删（/step_plan/v1 是真实形态）
+	step := ChannelConfig{Name: "step", BaseURL: "https://api.stepfun.com/step_plan/v1"}
+	if err := step.Validate(); err != nil || step.BaseURL != "https://api.stepfun.com/step_plan/v1" {
+		t.Fatalf("中间前缀段被改坏了：%q %v", step.BaseURL, err)
+	}
+}

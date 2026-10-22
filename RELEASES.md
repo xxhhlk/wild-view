@@ -3425,3 +3425,296 @@ DeepSeek Harness 的 system prompt 正是以这句开头，于是经本代理转
 | [@prince121212](https://github.com/prince121212) | PR #175 工具结果图片走 vision（R113）+ PR #177 请求体上限与图片降采样（R114），含真机 A/B 实测 |
 | [@wzwjustdoit](https://github.com/wzwjustdoit) | PR #178 DSH 身份句脱敏（R115），含完整直发实测矩阵 |
 
+# wild-work v2.9.5
+
+本版重心是**把自定义渠道做成能用的东西**（拉模型 + 认端点 + 管 key），同时收掉 WorkBuddy
+会话指纹、小浣熊长思考首字节、Loomy 短信登录三条「用着用着就废」的故障。
+对应决议 **R116 / R117 / R118 / R119 / R120 / R121**（R115 有一条续写）。
+
+## 🔌 自定义渠道：填个地址就能用（R119 + R121）
+
+把本工具当「多 endpoint API Key 管理 + 统一用量统计」用时，自定义渠道有三条硬伤：
+能力靠猜、地址靠手抄、key 看不见。
+
+**① 上游 `/models` 尽力解析能力，拿不到就明说（R119）**
+
+- 新增 `internal/custom/probe.go`：`parseModelsPayload` 宽容解析各家形状（OpenAI 官方只回
+  `id`；new-api/one-api 风格平铺 `context_window`；OpenRouter 风格把能力塞在
+  `supported_parameters` 数组、`architecture.input_modalities`、`top_provider.*`；以及
+  `{"result":{"models":[…]}}` 再套一层的网关），别名表按优先级命中第一个非空即用。
+- 新增 `internal/custom/caps.go` + `ModelConfig.cap_source`（`api` / `user` / 空=未探测，
+  `omitempty` ⇒ 老配置零迁移归 `unknown`）。**`Validate` 会把野值归一为 `unknown`**：脏数据
+  不得谎称「上游声明」。
+- 勾选导入**不再编造默认值**：旧版 `confirmModelImport` 给每个导入的模型写死
+  `1000000 / 64000 / 识图+思考+工具全开`，等于替上游说话（违反 R49 同口径）。现在只写上
+  游真给到的字段，一个都没拿到的只留模型名并在列表标「未探测」；已存在的行给「更新能力」
+  按钮，把旧版编造的值洗成上游真值。
+- 修掉「自定义渠道的上下文列恒不显示」：`provider.ModelInfo` 新增 `ContextFromUser`，
+  `has_context = ContextFromAPI || HandMeasured || ContextFromUser`，费率页与模型列表的
+  来源措辞按 `cap_source` 三分（上游接口返回 / 本工具实测 / 面板手填）。
+
+**② 接入点规范化 + 端点变体嗅探（R121）**
+
+- 新增 `internal/custom/endpoint.go` 的 `NormalizeBaseURL`，挂在 `ChannelConfig.Validate()`
+  上（保存面板配置、以及直接手改 `config.json` 再启动都会被治好）：去掉首尾空白与成对引号、
+  缺协议时补（`localhost/127./192.168./10./172.16.` 等内网默认 `http`，其余 `https`）、
+  剥掉误粘在尾部的 `/chat/completions`·`/completions`、丢弃 query/fragment/账号密码段与
+  结尾斜杠。**只剥这两个已知对话尾巴**——`/step_plan/v1` 这类中间前缀段绝不猜删，猜错就是把
+  可用地址弄坏。
+- `Discover` 定位真实端点，**全程只发 GET**：POST 到对话端点会产生真实调用与费用，嗅探阶段
+  无权花用户的钱。判读分三层——⑴ `{根}/models` 返回带 `id` 的条目 = 确认；⑵ 目录全线拿不到时
+   退一步，`{根}/chat/completions` 回**非 404 且不是 HTML 页面** = 认为路由存在（**属推断**，
+   结论里必须写明「上游未开放模型目录，模型与能力需手填」）；⑶ 401/403 **不记为存在**：
+   网关在路由前就鉴权失败时，401 既可能来自错地址也可能来自对地址，说「已确认」就是把填错的
+   key 说成配好了。候选根只有「原样 / 去掉末尾 /v1 / 补上 /v1」三种，封顶 3+3 个请求。
+- 渠道编辑器加「🔍 识别端点」按钮与状态行；保存时异步复核一次，确认后的根**回写**（下次不必
+  重新发现）；失败时把逐条尝试结果（URL + HTTP 状态）原样列出。
+- 面板不再硬要求 `http(s)://` 前缀（漏协议交给后端规范化），但含空白的输入仍当场拒——那是
+  误粘整段 curl 的典型形态。
+
+**③ api-key：显示脱敏、点击才取原文（R119 + R121）**
+
+- `maskKey` 改为**前 12 + `****` + 后 4**（rune 计数，中文 key 不切坏字）。留长前缀是因为
+  第三方 key 的辨识度全在头部：百度千帆 `bce-v3/ALTAK…`、OpenAI `sk-proj-…` 只留 5 个字符
+  根本看不出是哪家；可见总量不超过原文一半，短 key（≤12）整串遮掉。四星固定，不泄漏长度。
+- **明文只在点「复制」那一刻单条下发**（`POST /api/config/custom_channel_key`），日志只记
+  渠道名。理由：`/api/state` 与 `/api/fees` 是 30s 轮询，把明文塞进批量载荷等于让第三方 key
+  长期驻留浏览器内存与网络日志。
+- 脱敏串同时充当「面板未改动这把 key」的记号（提交时按渠道名从现网配置找回真值）。改格式的
+  代价写进了不变量 2：Go/JS 两侧的判据必须同步认旧形（`…` / `••`）与新形，否则升级瞬间浏览器
+  里已渲染的旧脱敏串会被当成真值写进配置，**把可用 key 洗成废值**；前端也不得对后端已脱敏的值
+  再切一遍（旧版列表就这么把 `sk-re****1234` 切坏）。
+- 费率页每组顶部新增「接入点 / api-key」行，模型 ID 与接入点、key 都能一键复制。
+
+## 🤖 WorkBuddy：会话头族分层 + 身份链对齐官方桌面（R116 / R117）
+
+- **会话头族按官方三层语义分层**（R116）：`X-Conversation-ID`（会话级，掺账号 uid 的 sha256
+  派生 UUIDv4 形态）/ `X-Conversation-Request-ID`（轮级，一次 user send 一个）/
+  `X-Conversation-Message-ID` + `X-Request-ID`（调用级，每请求新生成）/ `X-Root-Request-ID`。
+  旧实现四个头绑成同一个值且每请求现生成 —— 等于把一次多轮对话拆成上千个一次性会话，
+  在上游「按 Request-ID 计 send」的口径下直接放大限流命中面。会话/轮锚点取自首末条 user
+  消息文本哈希：**工具回调追加的是 assistant/tool 消息，末条 user 不变 ⇒ 一轮多步复用同一
+  轮 id**。国内版 `workbuddy` 此前**一个会话头都不发**，本轮补齐。
+- `11128 conversation id missing` 从「内容拦截」改为账号级软冷却（灰度期会出现「显示健康、
+  每次选中都失败」）；同码另一形态 `Illegal API invocation from an unapproved channel`
+  仍归内容拦截（请求级指纹问题，改提示词即可，不罚号）。
+- **身份链整体对齐官方桌面**（R117）：UA 从 `CLI/2.63.2 CodeBuddy/2.63.2` 改为
+  `WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0`，`X-IDE-Version` 5.5.4→5.8.3，`X-Product`
+  改 `SaaS`，新增 `X-Private-Data: true` 与 `X-Agent-Intent: craft`，**删掉本仓自造的
+  `X-Machine-ID` / `X-Session-ID`**（官方 chat 请求不发；少发两个头比伪造两个头更接近官方）。
+  取证为纯离线静态解包 `app.asar`，零上游请求。
+- 两区（国内 `internal/upstream` / 国际 `internal/workbuddyai`）**各持一份实现、互不 import**，
+  遵守 R58「渠道包之间不耦合」。
+- 实测：单账号 × 单模型 24 次请求（非流式/流式/并发 6/并发 8/9k 长上下文/tool call）两区
+  全 200，0 rotate、0×429、0×11128。
+
+## ⏱ 小浣熊：等响应头上限 60s→180s（R118）
+
+上游是**缓冲式网关**：即使请求带 `stream:true`，也要等深度思考跑到一定阶段才回首字节。
+实测 TTFB 三次为 64.9s / 102.9s / 95.0s，而 `newTransport()` 把 `ResponseHeaderTimeout`
+写死 60s ⇒ 累计 235 次 `timeout awaiting response headers`，每次精确落在 60.0s；按 R109
+传输层错误不换号，客户端只能看到 502。现取 `max(180s, upstream.timeout_seconds)`
+（**只放大不压低**），流中空闲看门狗维持 90s 不放宽——拿到响应头后彻底卡死，多等只是让用户
+多等。
+
+## 📊 华为云果办：云端按日消耗（积分 / Token）
+
+新增 `internal/officeace/usage.go` 的 `SubscriptionUsageDaily` / `SubscriptionUsageToday`，
+按北京自然日聚合上游的积分与 Token 消耗。补齐三处评审遗留：`created_at` 兼容数字形态
+（13 位毫秒 / 10 位秒，长度不像时间戳的不猜、0 值不归属）；同一自然日多条**必须合并并按 Day
+升序**（差分记账靠相邻两条做差，依赖上游回传顺序不安全）；HTTP ≥400 改为类型化
+`*provider.Error`（裸 `fmt.Errorf` 会让 `errors.As` 取不到分类，401 自愈永不生效 —— R79），
+401 归 `ErrAccountFault` 不误 Disable 账号。
+
+> 已知限制：这两个接口目前全仓零调用方，面板「今日消耗」仍未接入云端口径（与 R17 双流水
+> 口径需产品决策）。
+
+## 🧬 脱敏补一条 DSH Web GUI 品牌短语（R115 续）
+
+`#178` 合并后身份句已脱敏，但 DSH 完整 system prompt 仍稳定 400 `11128`。用真实会话日志
+二分定位：触发点在结尾的 `DeepSeek Harness Web GUI` 说明段，两句单独发送均 200、拼接即 400。
+两份表（`internal/sanitize` 生产路径 / `internal/upstream` 平行实现）各补一条改写。
+新增 `sanitize_parity_test.go`：**同一段指纹分别过生产单道与内部双道，结果必须逐字相同** ——
+把「两份表必须同步」从人肉 diff 变成机器守卫，只改一份时当场变红。
+
+## 📱 Loomy 短信登录：一次下发失败不得钉成终态（R120，fix #173）
+
+现场：用户「提交提示先点获取验证码、再点显示失败请重试」。根因是 `sendCode` 把短信下发失败
+调 `s.fail()` 置**终态** ⇒ 面板 Poll 拿到终态错误后 `Shutdown()` 关掉 loopback 监听；而页面
+`msgid` 从未赋值（只在 JS 变量里，刷新即丢），用户再点则 fetch 连不上 → 统一显示「失败请重试」。
+更隐蔽的是 `login` 末尾的守卫把 PhaseFailed 也算「不可再写」⇒ **一次瞬时失败后的真实成功被
+静默丢弃**（页面说成功、面板恒报旧错）。
+
+修法：下发失败降级为非终态 `noteSendFail` + `Status.SendErr` 可见；守卫改「只拒绝已取消」；
+`msgid` 服务端留一份并经 `/api/loomy/status` 回传 + 提交兜底补齐（只监听 127.0.0.1，断言不回
+凭据/手机号明文）；提交前 `isCurrent()` 守卫把拒绝放在上游调用之前；删 `session.fail()`。
+
+## ✅ 验证
+
+- `go build ./... && go vet ./... && go test ./...` 全绿；`node scripts/ui-static-check.mjs`
+  全部通过。
+- 本版新增回归：`internal/custom/probe_test.go`（11 例，含「caps 的 JSON 字段名必须能直接解进
+  `ModelConfig`」）、`internal/custom/endpoint_test.go`（`NormalizeBaseURL` 24 例 + 候选根
+  顺序/去重/畸形 URL）、`internal/custom/discover_test.go`（8 例，含「绝不发 POST」「HTML
+  兜底页不得当成端点存在」「401 全线必须报错」）、`internal/app/custom_channel_test.go`
+  （长前缀脱敏、旧标记识别、`/api/state` 与费率载荷里绝不得出现明文 key、端点定位走真实
+  handler）、`internal/custom/custom_test.go`（脏 `cap_source` 归一、简写形态无能力信息、
+  `Validate` 挂规范化）、`internal/login_loomy/issue173_test.go`（5 例）、
+  `internal/sanitize/sanitize_test.go` + `internal/upstream/sanitize_parity_test.go`、
+  `internal/raccoon/timeout_test.go`、两区 `convheaders_test.go` / `identity_headers_test.go` /
+  `conversation_headers_test.go`。
+- **变异验证累计 20+ 处逐条确认变红**（R119 8 处、R121 9 处、R120 4 处、R105/R112/R113 等）。
+
+## ⚠️ 已知限制
+
+- 能力别名表命中不了的上游（如官方 `/models` 只回 `id`）⇒ 全部标「未探测」，需用户手填 ——
+  这正是设计意图：**不猜**。OpenRouter 的 `supported_reasoning_levels` 这类嵌套档位表当前
+  取不到（不为此发第二个请求）。
+- 「非 404 = 对话端点存在」是**推断**而非证明（405 也可能来自中间件），所以结论必须带 Note。
+- 端点嗅探不猜任意前缀（`/api/passthrough/anthropic` 这类只能由用户填对）。
+- `X-Conversation-*` 的派生只影响「像不像真人」，不影响通过率（上游对取值形态无校验，R71 实测）；
+  客户端若每轮改写首条 user 消息（如自带时间戳前缀）则会话 id 会变化，退回旧形态。
+- WorkBuddy 身份版本号是**快照**（本机桌面 5.8.3 / 内嵌 CLI 2.161.0），官方升级后需按
+  `Info.plist` + `cli/package.json` 复核。
+
+## 🙏 致谢
+
+| 贡献者 | 内容 |
+|--------|------|
+| [@jianzhangg](https://github.com/jianzhangg) | R116 会话头族分层 + 国内版补齐、R117 身份链对齐官方桌面、R118 小浣熊等响应头 180s |
+| [@A-Beansprout](https://github.com/A-Beansprout) | 华为云果办云端按日消耗查询与端点契约/时区测试（PR #180） |
+| [@wzwjustdoit](https://github.com/wzwjustdoit) | R115 续写：DSH Web GUI 品牌短语脱敏（PR #185），含完整 prompt 二分定位 |
+
+# wild-work v2.9.6
+
+本版重心是**把自定义渠道面板改到手**（八项，R122）+ 模型目录对外补齐 OpenRouter 规范字段
+（R124）+ 签到时间改就地选择（PR #187）。对应决议 **R122 / R123 / R124**。
+
+> ⚠️ **自动更新没进本版**。PR #188 的更新引擎已单独劈到 **`feat/auto-update`** 分支
+> （= master + PR #188，默认 `enabled=false` / `auto_check=false`，已修 Windows 必红的测试）。
+> 它有十条已知问题（digest 与产物同源自证、无平台闸门、无回滚窗口、空闲看门狗只有注释等），
+> 需要的人自行拉该分支构建；主线暂不含任何自替换二进制的代码。
+
+## 🔌 自定义渠道面板：八项改进（R122）
+
+上一版能拉模型、能认端点，但用起来处处别扭。这版逐条改掉：
+
+**① 渠道标识可以改名了**（以前编辑态是灰的）
+标识**就是** `provider.Kind`：状态文件名 `state-custom-<name>.json`、虚拟账号 UID、模型前缀
+`name/model`、降级链、思考强度映射全以它为键。所以改名不是改一个字段，而是一次级联：
+
+- 面板**显式提交** `renames:[{new, old}]` —— 只比对新旧两张表无法区分「改名」与
+  「删掉一个 + 新增一个」，必须让人说清楚。
+- 后端 `SetCustomChannels` 按**新名**查不到脱敏串时必须回退查**旧名**找回真实密钥，
+  否则用户改了名、面板把脱敏串当新值提交，真 key 会被空串覆盖并落盘（最致命的一条）。
+- 联动改写 `compat.model_map`、`compat.default_channel`、`model_fallback`（`From` 与 `To`
+  两侧）、`reasoning_efforts` 的**键**，并把新表推给降级链/思考强度的内存副本。这四类配置
+  只校形状、不校渠道是否存在 ⇒ 不联动就是「配置还在、永久静默失效」。
+- 旧的 `state-custom-<旧名>.json` 改名留档为 `.old`，**不搬到新名**（旧文件里的 UID 是
+  `custom-<旧名>`，搬过去等于塞进一堆对不上号的条目）。
+- 改名前会弹确认，如实列出代价。
+
+**② API Key 加了「眼睛」**（R121 只能点复制）
+点眼睛 → 向 `POST /api/config/custom_channel_key` **按需取这一条**明文填进输入框，再点收回、
+关窗即清。明文只活在「弹窗开着」那段时间：列表、`/api/state`、`/api/fees` 一律只给脱敏串
+（这两个接口每 30s 轮询，批量下发明文等于让第三方 key 长期驻留在浏览器里）。新增渠道时密钥
+就在你手上，点眼睛就地切换，不发请求。
+
+**③ 识别详情独立成行**
+以前「✓ 根 / 模型目录 N 个 / 对话端点存在」和输入框挤在一行，长串会把输入框挤没。现在挪到
+下面独立一行。
+
+**④ 导入与手填合并成一个 tab panel**
+「＋ 模型」按钮打开同一个弹层：**上游列表** / **手动添加·编辑** 两页签。手填页签不会打上游。
+（原来三个弹层互相跳，改一个模型要点四五次。）
+
+**⑤ 「点导入不是每次都能列出模型列表」——这条是真缺陷，已修**
+`TestConnection` 旧版把响应体截在 **1 MiB**，OpenRouter 一类目录有 3~4 MiB ⇒ JSON 被拦腰截断 ⇒
+报「上游返回的不是合法 JSON」，看起来就像「这个上游列不出模型」。现在上限提到 **8 MiB**
+（超限明确报错，不给半截清单），超时 15s→45s（走加速代理时首字节本就有几十秒）。
+另外规范化会把结尾的 `/models` 也当 API 尾巴剥掉——有人粘的就是目录地址，
+不剥会拼出 `{root}/models/models`，看着像「上游没有 /models」，实际是我们自己拼错。
+
+**⑥ 导入列表改成行内 ＋/− 即时增删**
+每个模型行尾一个 ＋（未添加）/ −（已添加），点一下就进/出该渠道的配置；删掉「全选」「全不选」
+「导入选中」三个按钮和那步没有意义的中间确认。已添加的行仍可「更新能力」（把上一版被编造出来的
+`1M/64k/全能力开` 洗成上游真值）。
+
+**⑦「关闭」现在有保存语义**
+以前自定义渠道弹层的「关闭」就是关窗，**没保存的东西静默丢掉**。现在：脏了先保存，保存失败
+**不关窗**（错误留在原地），成功后立刻刷新一次模型列表与费率页 ⇒ 新加的 provider 当场出现在
+模型列表里，不用重启、不用再点别的按钮。
+
+**⑧ 费率页加「显示全部模型」开关**
+自定义渠道的接入点那一行后面多了个 switch，默认关 = 现在行为（只显示已配置的模型）。
+打开才**现拉**一次该 provider 的 `/models`，把上游有、本地没配置的模型列在旁边，标「未添加」，
+有能力的顺带显示能力。这个开关**只展示、不写盘**，也不是常开（费率页 30s 轮询不能变成每 30s
+打一次上游）。想添加请回到渠道面板点 ＋。
+
+## 📋 `/v1/models` 补 OpenRouter 规范字段（PR #189 → R124）
+
+出站模型目录现在按**已声明的能力**输出：
+
+- `supported_parameters`：`SupportsTools` ⇒ `tools`、`tool_choice`；有思考档位 ⇒ `reasoning`、
+  `reasoning_effort`；两者皆无 ⇒ 整个字段**缺席**（不是空数组）。
+- `reasoning.mandatory` = `!can_disable_thinking`，且**只在上游明确给过这个信息时出现**；
+  上游没说的，绝不脑补 `mandatory: true`。
+- 与 issue #96 的既有字段（`supported_efforts` / `default_effort` / `can_disable_thinking`）
+  并列保留，两类客户端都能读。
+
+**合入时剔掉了 `include_reasoning`**：这个参数本仓全仓零处理点（入站只吃 `reasoning_effort`
+和 Responses 的 `reasoning` 对象）。在 `/v1/models` 上宣告一个我们不接的参数，等于让客户端
+照着发、然后被静默忽略——与 R49「只透传声明，绝不编造」是同一条红线，所以删掉并加了护栏断言：
+`supported_parameters` 里出现 `include_reasoning`/`temperature`/`top_p` 即测试失败。
+
+## 🕐 签到时间改就地时间选择器（PR #187）
+
+设置里点「＋ 时间」以前直接塞当前时刻，等于让你先猜再改。现在弹出就地时间选择器，
+可手动选到分钟。
+
+## 🧪 验证
+
+- `go build ./... && go vet ./... && go test ./...` 全绿；`node scripts/ui-static-check.mjs`
+  全部通过（本版**改写 17 条**旧断言 + 新增 20 余条 R122/R124 断言，其中两条是**有意反转**：
+  「渠道标识编辑态不可改」→「可改且必须提交 renames」、「导入行用 checkbox/label」→
+  「不得再有 checkbox，行尾 ＋/− 按钮」）。
+- 本版新增回归：`internal/app/custom_rename_test.go`（`TestCustomChannelRenameCascade` 五件事：
+  按旧名找回真实密钥、四类引用联动、旧 state 留 `.old`、两个 syncer 都被推、新名可解析而旧名失效；
+  `TestCustomChannelRenameInvalidDropped` 三类非法改名必须静默丢弃）、
+  `internal/custom/discover_test.go`（4 MiB/4000 条大目录全须解出；粘 `/v1/models` 不得拼出
+  `/models/models`）、`internal/custom/endpoint_test.go`（补 6 例 `/models` 尾巴）、
+  `internal/server/handler_models_test.go`（`TestModelEntryOpenRouterParameters` 四子例）。
+- **变异验证 16 处逐条确认变红**（不按旧名找回密钥 / 引用表方向写反 / 不推 syncer / 不迁移旧
+  state / `default_channel` 不联动 / 无效改名不丢弃 / 上限退回 1 MiB / 不剥 `/models` 尾巴 /
+  不规范化 BaseURL / 「全部模型」顺手写盘 / 「关闭」丢掉保存语义 / 保存后不刷费率页 / 标识回到
+  禁改 / 关窗不清明文 / 前端恢复二次脱敏 / 眼睛按钮没接线）。
+- 发版前 `go test -count=1 ./...` 连跑两轮全绿（48 个包），并把上面两个墙钟测试改成事件驱动。
+- 单测当场抓出两处我自己写错的东西：`renameCustomRefs` 的映射方向（**新→旧**用于密钥找回，
+  引用表里出现的是**旧名**，首版直接用反方向的表 ⇒ 四类配置一条都没联动）、以及上一版
+  把「密钥被上游拒绝」写成「端点已确认」。
+
+## ⚠️ 已知限制
+
+- **历史流水仍记旧渠道名**。用量/积分账本里的渠道名是记账当时的名字，改名不会把历史洗成新名
+  （那等于伪造账本），面板上会看到改名前后分成两段。
+- 改名后**旧前缀模型立即不可用**：`glm-old/xxx` 会直接 `400 unknown channel`，不做别名兼容；
+  客户端里硬编码旧前缀的地方需要自己改。
+- 「显示全部模型」是**只读展示**，不代勾选、不落盘；探测结果不缓存（每次打开现拉一次）。
+- 上游只回 `id` 的 OpenAI 官方形态仍然什么都探测不到，标「未探测」，能力要手填——这是有意的：
+  本仓不给上游没说的话签字。
+- `stats.RegisterChannelKind` 只增不删，改掉的旧渠道名在运行统计里会残留一个零值条目（不影响路由与账本）。
+- `internal/app` 三个**用墙钟做断言**的测试本机偶发假红，本版已改掉其中两个：
+  `TestCreditAutoRefreshSurvivesFailure` / `TestCreditAutoRefreshCancels` 改成「先轮询到真的跑过一轮
+  再取基线」（`cancel()` 时可能有请求在途，旧写法在在途期间取基线 ⇒ 取消后计数继续涨的假红）；
+  自定义渠道测试的 `t.TempDir()` 换成 `appTempDir(t)`（Windows 下 pool 异步落盘与自动清理撞车，
+  实测报 `TempDir RemoveAll cleanup: … The directory is not empty`）。
+  **`TestSetListenRequiresPassword` 仍会在跨包并行（`go test ./...`）时偶发**（它真去占
+  17863/17864 端口，负载高时监听切换来不及落定），单跑与整包跑均稳定绿，非本版引入。
+
+## 🙏 致谢
+
+| 贡献者 | 内容 |
+|---|---|
+| [@xxhhlk](https://github.com/xxhhlk) | PR #187：签到时间改就地时间选择器 |
+| [@zrtzrt](https://github.com/zrtzrt)（代码作者 reno） | PR #189：`/v1/models` 输出 `supported_parameters` 与 `reasoning.mandatory`（R124） |
+

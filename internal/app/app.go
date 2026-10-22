@@ -59,7 +59,7 @@ import (
 )
 
 // Version 版本号。
-const Version = "2.9.4"
+const Version = "2.9.6"
 
 const (
 	loginTimeout   = 5 * time.Minute
@@ -2793,51 +2793,179 @@ func feeChannelOrderWithDynamic(modelsByKind map[provider.Kind][]provider.ModelI
 	return append(append([]provider.Kind{}, feeChannelOrder...), extra...)
 }
 
-// SetCustomChannels 保存并热更新自定义渠道配置（R66）。
+// customRename 一条渠道改名记录（R122）：面板编辑渠道标识时，随整表一起声明
+// 「New 这个新标识是从 Old 这个旧标识改过来的」。
 //
-// api_key 脱敏回写处理（同 oczen key）：面板回显的是脱敏值（含 …）。
-// 用户没改动过某个渠道的 key 时，提交回来的仍是脱敏串——若原样落盘，
-// 就会把真实密钥换成「sk-abc…wxyz」这种废值。故此处对每个渠道：
-// 提交值含 「…」 则视为未修改，从现有配置按渠道名找回真实密钥。
-func (a *App) SetCustomChannels(channels []custom.ChannelConfig) error {
+// 为什么必须显式传：渠道标识**就是** provider.Kind（cmd/wild-work/main.go 里
+// `k := provider.Kind(cc.Name)`、state 文件与虚拟账号 UID 全部拼名字），而只对比新旧两张表
+// 无法区分「改名」与「删一个 + 新增一个」——不声明就会踩到：脱敏回来的密钥按新名找不回、
+// 真密钥被空串覆盖落盘。
+type customRename struct {
+	New string `json:"new"`
+	Old string `json:"old"`
+}
+
+// SetCustomChannels 整表替换自定义渠道配置（R66）。
+//
+// api_key 脱敏回写处理（同 oczen key）：面板回显的是脱敏值。用户没改动过某个渠道的 key 时，
+// 提交回来的仍是脱敏串——若原样落盘就把真实密钥换成了废值。故：提交值是脱敏形态
+// （isMaskedKey）则视为未修改，从现有配置按渠道名找回真实密钥；改名过的渠道另按旧名找回。
+func (a *App) SetCustomChannels(channels []custom.ChannelConfig, renames ...customRename) error {
+	_, err := a.setCustomChannels(channels, renames)
+	return err
+}
+
+// setCustomChannels 同 SetCustomChannels，额外返回**真正生效**的改名条数（面板要如实告知用户
+// 引用配置被联动了几处；非法/无效的改名声明会被丢弃，不能拿提交数当成绩）。
+func (a *App) setCustomChannels(channels []custom.ChannelConfig, renames []customRename) (int, error) {
 	seen := map[string]bool{}
 	for i := range channels {
-		if strings.Contains(channels[i].APIKey, "…") { // 脱敏形态 = 未改动，保留现值
+		if isMaskedKey(channels[i].APIKey) { // 脱敏形态 = 未改动，保留现值
 			channels[i].APIKey = ""
 		}
 		if err := channels[i].Validate(); err != nil {
-			return err
+			return 0, err
 		}
 		if seen[channels[i].Name] {
-			return fmt.Errorf("重复的渠道标识 %q", channels[i].Name)
+			return 0, fmt.Errorf("重复的渠道标识 %q", channels[i].Name)
 		}
 		seen[channels[i].Name] = true
 	}
 	a.mu.Lock()
 	// 找回被提交为脱敏形态的密钥（按渠道名匹配现值）
 	prev := map[string]string{}
+	prevNames := map[string]bool{}
 	for _, cc := range a.cfg.CustomChannels {
 		prev[strings.ToLower(cc.Name)] = cc.APIKey
+		prevNames[strings.ToLower(cc.Name)] = true
+	}
+	// 改名映射（新→旧）：密钥找回与后续级联都靠它；非法项直接丢（旧名不存在或新旧相同不算改名）
+	ren := map[string]string{}
+	for _, r := range renames {
+		nw, od := strings.ToLower(strings.TrimSpace(r.New)), strings.ToLower(strings.TrimSpace(r.Old))
+		if nw == "" || od == "" || nw == od || !prevNames[od] || prevNames[nw] {
+			continue
+		}
+		ren[nw] = od
 	}
 	for i := range channels {
-		if channels[i].APIKey == "" {
-			if k := prev[channels[i].Name]; k != "" {
-				channels[i].APIKey = k
+		if channels[i].APIKey != "" {
+			continue
+		}
+		k := prev[channels[i].Name]
+		if k == "" { // 改名后按新名查不到 ⇒ 必须回退查旧名，否则真密钥被空串覆盖并落盘
+			if od, ok := ren[channels[i].Name]; ok {
+				k = prev[od]
 			}
 		}
+		if k != "" {
+			channels[i].APIKey = k
+		}
+	}
+	compatTouched := 0
+	if len(ren) > 0 {
+		compatTouched = renameCustomRefs(a.cfg, ren)
 	}
 	a.cfg.CustomChannels = channels
 	err := config.Save(a.cfg, a.cfgPath)
 	syncer := a.customSyncer
+	fbSyncer, efSyncer := a.fbSyncer, a.efSyncer
+	fbRules, efforts := a.cfg.ModelFallback, a.cfg.ReasoningEfforts
 	a.mu.Unlock()
 	if err != nil {
-		return fmt.Errorf("保存配置失败：%w", err)
+		return 0, fmt.Errorf("保存配置失败：%w", err)
+	}
+	// 改名连带改写了降级链/思考强度映射，而这两张表在 server.Handler 里是**另一份内存副本**：
+	// 只改 cfg 不推 syncer，热路径会继续拿旧 key 查（要到面板重存一次才能修好）。
+	if len(ren) > 0 {
+		if fbSyncer != nil {
+			fbSyncer(fbRules)
+		}
+		if efSyncer != nil {
+			efSyncer(efforts)
+		}
+	}
+	for nw, od := range ren {
+		renameCustomState(a.stateDir(), od, nw) // 旧 state 文件留 .old，不硬删
+		log.Printf("自定义渠道标识已改名：%s → %s（引用配置联动 %d 处）", od, nw, compatTouched)
 	}
 	if syncer != nil {
 		syncer(channels)
 	}
 	log.Printf("自定义渠道配置已更新：共 %d 个渠道", len(channels))
-	return nil
+	return len(ren), nil
+}
+
+// renameCustomRefs 把以 `旧标识/` 为键或值前缀的引用配置改写成新标识（R122）：
+// compat.model_map / compat.default_channel / model_fallback / reasoning_efforts。
+//
+// 为什么必须联动：这几类配置**只校形状不校渠道存在性**，改名后旧前缀不会报错、只会静默
+// 失效（用户看到「配置还在、就是不起作用」）。返回改写条数，供面板如实告知。持 a.mu 调用。
+func renameCustomRefs(cfg *config.Config, ren map[string]string) int {
+	// ren 的方向是「新→旧」（密钥找回靠它），而引用配置里出现的是**旧名** ⇒ 必须先倒转。
+	// 同一个旧名被声明改成两个新名是脏数据（无法判断哪个是真），跳过它，不猜。
+	cnt := map[string]int{}
+	for _, od := range ren {
+		cnt[od]++
+	}
+	to := make(map[string]string, len(ren))
+	for nw, od := range ren {
+		if cnt[od] == 1 {
+			to[od] = nw
+		}
+	}
+	swap := func(s string) string {
+		if i := strings.Index(s, "/"); i > 0 {
+			if nw, ok := to[strings.ToLower(s[:i])]; ok {
+				return nw + s[i:]
+			}
+		}
+		return s
+	}
+	n := 0
+	for k, v := range cfg.Compat.ModelMap {
+		if nv := swap(v); nv != v {
+			cfg.Compat.ModelMap[k] = nv
+			n++
+		}
+	}
+	if od := strings.ToLower(strings.TrimSpace(cfg.Compat.DefaultChannel)); od != "" {
+		if nw, ok := to[od]; ok {
+			cfg.Compat.DefaultChannel = nw
+			n++
+		}
+	}
+	for i := range cfg.ModelFallback {
+		if v := swap(cfg.ModelFallback[i].From); v != cfg.ModelFallback[i].From {
+			cfg.ModelFallback[i].From, n = v, n+1
+		}
+		for j := range cfg.ModelFallback[i].To {
+			if v := swap(cfg.ModelFallback[i].To[j]); v != cfg.ModelFallback[i].To[j] {
+				cfg.ModelFallback[i].To[j], n = v, n+1
+			}
+		}
+	}
+	for k, v := range cfg.ReasoningEfforts {
+		if nk := swap(k); nk != k {
+			delete(cfg.ReasoningEfforts, k)
+			cfg.ReasoningEfforts[nk] = v
+			n++
+		}
+	}
+	return n
+}
+
+// renameCustomState 把 state-custom-<旧>.json 改名留档（照 migrateStateFiles 的先例：只 rename
+// 不删除，便于回滚）。新标识的池子从零开始，不搬旧快照——旧文件里的 UID 是 `custom-<旧>`，
+// 原样搬到新文件会把一个对不上号的账号条目弄进新池子里。
+func renameCustomState(dir, oldName, newName string) {
+	old := filepath.Join(dir, "state-custom-"+oldName+".json")
+	if !fileExists(old) {
+		return
+	}
+	if err := os.Rename(old, old+".old"); err != nil {
+		log.Printf("迁移自定义渠道状态文件失败（%s）：%v", oldName, err)
+	}
 }
 
 // resolveCustomKey 按渠道名取真实 api_key（供脱敏回显时的测试与保存路径使用）。
@@ -2853,8 +2981,21 @@ func (a *App) resolveCustomKey(name string) string {
 	return ""
 }
 
-// maskCustomChannels 返回配置的深拷贝，并将 api_key 脱敏（非空时仅露首 3 + 尾 4）。
-// 脱敏串保留 「…」 标记，供 SetCustomChannels 识别「未改动」。
+// customChannelFeesMeta 返回渠道名 -> [接入点, 脱敏 key]，只给费率页用（R119）。
+// 这里给的必须是 maskKey 后的脱敏串：费率页会被面板反复拉，批量发明文等于
+// 把所有第三方 key 长期暴露在浏览器内存/抓包里。
+func (a *App) customChannelFeesMeta() map[string][2]string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make(map[string][2]string, len(a.cfg.CustomChannels))
+	for _, cc := range a.cfg.CustomChannels {
+		out[cc.Name] = [2]string{cc.BaseURL, maskKey(cc.APIKey)}
+	}
+	return out
+}
+
+// maskCustomChannels 返回配置的深拷贝，并将 api_key 脱敏（长头 + **** + 短尾，见 maskKey）。
+// 脱敏串里的 **** 就是「未改动」标记，供 SetCustomChannels / 测试端点识别。
 func maskCustomChannels(in []custom.ChannelConfig) []custom.ChannelConfig {
 	out := make([]custom.ChannelConfig, 0, len(in))
 	for _, cc := range in {
@@ -2988,16 +3129,37 @@ func (a *App) TestOczenKey(apiKey string) (int, string, bool, error) {
 	return status, body, via, nil
 }
 
-// maskKey 脱敏 API key：保留前 5 后 4，中间以 … 代替；空串原样返回。
+// maskKey 脱敏形态：长头 + **** + 短尾（R121）。头取 12 个字符、尾取 4 个，但可见总量
+// 不得超过原文一半（短 key 自动收缩头部，收到 4 字符以下就直接全遮）。
+// 头部留长是硬需求：第三方 key 的**前缀**才是辨识度来源（百度千帆 bce-v3/ALTAK…、
+// OpenAI sk-proj-…），只留 5 个字符根本看不出是哪家，不能假定密钥都形如 sk-…。
+// 中间固定四个星（不泄漏长度），四星同时充当「面板未改动」标记（见 isMaskedKey）。
 func maskKey(key string) string {
-	if key == "" {
+	r := []rune(strings.TrimSpace(key))
+	if len(r) == 0 {
 		return ""
 	}
-	r := []rune(key)
-	if len(r) <= 9 {
-		return string(r[:1]) + "…"
+	if len(r) <= 12 {
+		return maskedMark // 短到「露头 + 尾」就等于露大半原文，直接全遮
 	}
-	return string(r[:5]) + "…" + string(r[len(r)-4:])
+	head, tail := 12, 4
+	if head+tail > len(r)/2 {
+		head = len(r)/2 - tail // 可见字符总量没有上限一半，短 key 自动收缩头部
+	}
+	if head < 4 {
+		return maskedMark
+	}
+	return string(r[:head]) + maskedMark + string(r[len(r)-tail:])
+}
+
+// maskedMark 是脱敏串的中间标记，同时被当作「面板未改动过此字段」的记号（isMaskedKey）。
+const maskedMark = "****"
+
+// isMaskedKey 认一个字符串是不是脱敏形态（而不是用户真填的密钥）。
+// 三种都认：新格式 ****、旧格式 …、更早的前端 … 占位——升级瞬间浏览器里可能还
+// 渲染着旧脱敏串，当成真值落盘会把可用密钥洗成废值（这个判定同时活在 Go 与 JS 两侧）。
+func isMaskedKey(s string) bool {
+	return strings.Contains(s, maskedMark) || strings.Contains(s, "…") || strings.Contains(s, "••")
 }
 
 // SetBackupProxy 保存全局**备用上游通道**（单一代理地址，空串 = 关闭）并即时生效。
@@ -3285,7 +3447,7 @@ func (a *App) GetState() State {
 	sort.Strings(st.Compat.Channels)
 	st.BackupProxy = a.cfg.BackupProxy
 	st.BackupProxyActive = backuplink.Enabled()
-	// oczen key 脱敏回显：仅露首 5 + 尾 4（空则原样空串）
+	// oczen key 脱敏回显（与自定义渠道同一套 maskKey，面板侧靠 **** 识别未改动）
 	st.OczenAPIKey = maskKey(a.cfg.OczenAPIKey)
 	st.BodyLog = a.cfg.BodyLog
 	// 自定义渠道路由的 api_key 同样脱敏回显（不把上游密钥明文送进面板载荷）。
@@ -3984,16 +4146,22 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/config/custom_channels", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Channels []custom.ChannelConfig `json:"channels"`
+			Renames  []customRename         `json:"renames"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			apiError(w, http.StatusBadRequest, "解析请求失败："+err.Error())
 			return
 		}
-		if err := a.SetCustomChannels(req.Channels); err != nil {
+		n, err := a.setCustomChannels(req.Channels, req.Renames)
+		if err != nil {
 			apiError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "channels": a.cfg.CustomChannels})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       true,
+			"channels": a.cfg.CustomChannels,
+			"renamed":  n,
+		})
 	})
 	mux.HandleFunc("POST /api/config/custom_channel_test", func(w http.ResponseWriter, r *http.Request) {
 		var req custom.ChannelConfig
@@ -4005,18 +4173,62 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 			apiError(w, http.StatusBadRequest, "base_url 不能为空")
 			return
 		}
-		// 面板回显的 api_key 是脱敏值（含 …）：测试未改动过的渠道时必须用真实密钥，
-		// 否则测试恒报 401（与 #117 的「探针没走同一条链路」同类）。
-		if strings.Contains(req.APIKey, "…") {
+		// 面板回显的 api_key 是脱敏值：测试未改动过的渠道时必须用真实密钥，否则测试恒报 401
+		//（与 #117 的「探针没走同一条链路」同类）。判定不能只认「…」：脱敏格式改成长头长尾后
+		// 中间是四个星号，两种都得认，因为升级瞬间浏览器里可能还渲染着旧脱敏串。
+		if isMaskedKey(req.APIKey) {
 			req.APIKey = a.resolveCustomKey(req.Name)
 		}
-		client := custom.New(req)
-		models, err := client.TestConnection()
+		// 探测前先做端点定位（R121）：用户粘的地址常带 /chat/completions 尾巴、漏协议头，
+		// 直接拼会请求一个必死地址；Discover 同时回答「哪个根是真的」。
+		// 除纯 ID 外还回能力清单（R119）：前端勾选导入时直接拿这些字段写配置；
+		// 上游没声明的字段保持零值/nil ⇒ 前端标「未探测」，绝不拿 1M/64k 这类猜测值冒充上游声明（R49 同口径）。
+		d, err := custom.Discover(req)
+		var caps []custom.ModelCap
+		if d != nil {
+			caps = d.Caps
+		}
+		ids := make([]string, 0, len(caps))
+		for _, c := range caps {
+			ids = append(ids, c.ID)
+		}
+		resp := map[string]any{"models": ids, "caps": caps} // models 保持旧形状 []string，不破既有契约
+		if d != nil {
+			resp["base_url"], resp["adjusted"] = d.Base, d.Adjusted
+			resp["renormed"], resp["models_ok"] = d.Renormed, d.ModelsOK
+			resp["chat_ok"], resp["tries"] = d.ChatOK, d.Tries
+			if d.Note != "" {
+				resp["note"] = d.Note
+			}
+		}
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			resp["ok"], resp["error"] = false, err.Error()
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": models})
+		resp["ok"] = true
+		writeJSON(w, http.StatusOK, resp)
+	})
+	// 面板「点击复制 api-key」：明文按需单条下发，不随渠道列表/费率接口批量返回
+	//（否则每次刷新面板都把全部 key 送进浏览器，抓包/历史里全都是）。
+	// 口径说明：自定义渠道的 key 是**用户自己填的第三方凭据**，不是本工具的上游会话 token
+	//（不变量 2 管的是后者），且本端点同其它 /api/* 一样受 cookie 会话鉴权约束（R4）。
+	// 日志只记渠道名，绝不落 key 本身。
+	mux.HandleFunc("POST /api/config/custom_channel_key", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			apiError(w, http.StatusBadRequest, "解析请求失败："+err.Error())
+			return
+		}
+		key := a.resolveCustomKey(req.Name)
+		if key == "" {
+			apiError(w, http.StatusNotFound, fmt.Sprintf("自定义渠道 %s 不存在或未配置 api key", req.Name))
+			return
+		}
+		log.Printf("已下发自定义渠道 %s 的 api_key 明文（面板复制）", req.Name)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "api_key": key})
 	})
 	mux.HandleFunc("POST /api/account/nickname", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -4149,6 +4361,11 @@ func clientIP(r *http.Request) string {
 type feesChannel struct {
 	Channel string         `json:"channel"`
 	Models  []feesModelRow `json:"models"`
+	// BaseURL/APIKeyMasked 仅自定义渠道填写（R119）：面板把费率页当「模型接入点总表」用，
+	// 需要在一处看全每个模型的 endpoint 与 key。key 始终是**脱敏值**（maskKey），明文由前端点「复制」
+	// 时另走 POST /api/config/custom_channel_key 按需取，不随本接口批量下发。
+	BaseURL      string `json:"base_url,omitempty"`
+	APIKeyMasked string `json:"api_key_masked,omitempty"`
 }
 
 // feesModelRow 一行模型：来自渠道 models 列表，尽可能配上费率。
@@ -4176,6 +4393,10 @@ type feesModelRow struct {
 	MaxTokens     int64 `json:"max_tokens,omitempty"`
 	// HandMeasured 标记上述上下文值是**本工具实测**（非上游声明），前端据此加「实测」标注。
 	HandMeasured bool `json:"hand_measured,omitempty"`
+	// CapSource 能力/上下文数据的来源，供前端逐行如实标注（R119）：
+	// "api"=上游声明、"measured"=本工具实测、"user"=面板手填、""=未声明（前端显「未探测」）。
+	// 只影响展示文案，不影响路由；与自定义渠道配置里的 cap_source 同源。
+	CapSource string `json:"cap_source,omitempty"`
 	// 能力标记（与 /v1/models 同源），供 UI 在模型 ID 后展示图标。
 	SupportsImages    bool `json:"supports_images"`
 	SupportsReasoning bool `json:"supports_reasoning"`
@@ -4230,8 +4451,9 @@ func buildFeesChannels(modelsByKind map[provider.Kind][]provider.ModelInfo,
 				// 仅上游接口返回的上下文可信；硬编码估算值不展示数字。
 				// 上游声明（API）或本工具手工实测均视为「有上下文可展示」；
 				// 前端据 hand_measured 区分并加「实测」标注，不把实测冒充成官方值。
-				HasContext:   mi.ContextFromAPI || mi.HandMeasured,
+				HasContext:   mi.ContextFromAPI || mi.HandMeasured || mi.ContextFromUser,
 				HandMeasured: mi.HandMeasured,
+				CapSource:    capSourceOf(mi),
 				// 能力标记与 /v1/models 同源，保证 UI 图标与接口声明一致。
 				SupportsImages:    mi.SupportsImages,
 				SupportsReasoning: mi.SupportsReasoning,
@@ -4302,8 +4524,13 @@ func (a *App) FeesInfo() map[string]any {
 		go a.safeGo(func() { a.RefreshPricing() })
 	}
 
-	// 展示顺序固定（见 feeChannelOrder；旧 Qoder 跳过）
-	channels := buildFeesChannels(modelsByKind, cached, feeChannelOrder, a.cfg.Compat.ContextWindows)
+	// 展示顺序固定（见 feeChannelOrder；旧 Qoder 跳过），**末尾追加动态自定义渠道**（R66）。
+	// 必须追加：feeChannelOrder 是静态表，自定义渠道不在其中，若不追加则
+	// 面板费率表永远不出现该渠道 tab（buildFeesChannels 只遍历传入的 order）——
+	// 这与 /v1/models、用量流水、运行统计的可见性不一致。按渠道名排序保证稳定顺序。
+	order := feeChannelOrderWithDynamic(modelsByKind)
+	channels := buildFeesChannels(modelsByKind, cached, order, a.cfg.Compat.ContextWindows)
+	a.applyCustomFeesMeta(&channels)
 
 	result := map[string]any{
 		"note":       "本表以各渠道实际可用模型列表为准；倍率为空的模型表示上游未返回定价（未知）。",
@@ -4319,12 +4546,52 @@ func (a *App) FeesInfo() map[string]any {
 	return result
 }
 
+// capSourceOf 把 ModelInfo 的三个互斥来源位归成一个字符串，给面板逐行标注（R119）。
+// 优先级 api > measured > user：同时置位时以最权威的为准（与 provider.ModelInfo 注释一致）。
+func capSourceOf(mi provider.ModelInfo) string {
+	switch {
+	case mi.ContextFromAPI:
+		return "api"
+	case mi.HandMeasured:
+		return "measured"
+	case mi.ContextFromUser:
+		return "user"
+	}
+	return ""
+}
+
+// applyCustomFeesMeta 给费率表里的自定义渠道补上接入点与脱敏 key（R119）。
+// 抽成方法而不是内联在 FeesInfo：单测要能单独证「明文没进来、脱敏串进来了」。
+// 内建渠道的 endpoint 写死在代码里，无需展示 ⇒ meta 表不命中就保持空串。
+func (a *App) applyCustomFeesMeta(channels *[]feesChannel) {
+	meta := a.customChannelFeesMeta()
+	if len(meta) == 0 {
+		return
+	}
+	for i := range *channels {
+		if m, ok := meta[(*channels)[i].Channel]; ok {
+			(*channels)[i].BaseURL = m[0]
+			(*channels)[i].APIKeyMasked = m[1]
+		}
+	}
+}
+
 // staticModelFallback 无 handler 时的渠道→静态模型表兜底。
-// app.Runtime 不带静态表（那是 server.Runtime 的字段），故此处返回空，
-// 由 buildFeesChannels 自行跳过无模型的渠道；
-// 实际运行中 handler 总是已注入（SetHandler），不会走到这里。
+// app.Runtime 不带静态表（那是 server.Runtime 的字段），但**自定义渠道例外**：
+// 它的 FetchModels 是「配什么返回什么」，绝不发网络请求（R66，已有测试锁死），
+// 因此可以在此安全取回——否则启动早期/单测里费率页拿不到自定义渠道的行。
+// 内建渠道的目录接口会打上游，绝不在这里调 ⇒ 非 Custom 渠道仍返回空。
 func (a *App) staticModelFallback() map[provider.Kind][]provider.ModelInfo {
-	return map[provider.Kind][]provider.ModelInfo{}
+	out := map[provider.Kind][]provider.ModelInfo{}
+	for _, rt := range a.runtimesSnapshot() {
+		if rt == nil || !rt.Custom || rt.Upstream == nil {
+			continue
+		}
+		if ms, err := rt.Upstream.FetchModels(nil); err == nil && len(ms) > 0 {
+			out[rt.Kind] = ms
+		}
+	}
+	return out
 }
 
 // RefreshPricing 从所有已接入渠道拉取最新定价并更新缓存。

@@ -21,6 +21,8 @@ var featHeaders = []string{
 	"11128",
 	// DSH 身份句：上游按「system 消息开头」逐字锚定匹配（2026-10-21 实测）。
 	"You are an AI agent powered by DeepSeek Harness",
+	// DSH Web GUI 段：上游按 system 开头整段 221 字符逐字串锚定（2026-10-21 实测）。
+	"DeepSeek Harness Web GUI",
 }
 
 var reHdr = regexp.MustCompile(`(?i)x-anthropic-billing-header:[^;\n]*;?\s*`)
@@ -50,6 +52,12 @@ var rewrites = [][2]string{
 	{
 		"You are an AI agent powered by DeepSeek Harness",
 		"You are an AI agent powered by the DeepSeek Harness",
+	},
+	// DSH Web GUI 品牌短语：判据是整段逐字前缀（221 字符），不是关键词也不是跨句组合；
+	// 缩写为 DSH 即破坏逐字串，完整 prompt 通过（实测 200）。
+	{
+		"DeepSeek Harness Web GUI",
+		"DSH Web GUI",
 	},
 }
 

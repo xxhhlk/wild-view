@@ -21,6 +21,7 @@ var sanitizeFeatures = []string{
 	"github.com/anthropics/",                          // 反馈句里的 Anthropic 仓库链接
 	"11128",                                           // 上游反探测：裸数字错误码
 	"You are an AI agent powered by DeepSeek Harness", // DSH 身份句：上游按 system 开头逐字锚定（2026-10-21 实测）
+	"DeepSeek Harness Web GUI",                        // DSH Web GUI 段：上游按 system 开头整段 221 字符逐字串锚定（2026-10-21 实测）
 }
 
 // sanitizeHdrRe 剥离层：header 键名即触发（与值无关），整段删除。
@@ -83,6 +84,14 @@ var sanitizeRewrites = [][2]string{
 		// 语义扰动最小，且不依赖不可见字符或 Unicode 归一化（实测 200）。
 		"You are an AI agent powered by DeepSeek Harness",
 		"You are an AI agent powered by the DeepSeek Harness",
+	},
+	{
+		// DSH Web GUI 品牌短语：「整段 221 字符逐字串」的前半段（后半句为 "they mean this GUI."）。
+		// 实测判据是**连续逐字前缀**而非关键词或跨句组合：前半句单独出现放行、后半句单独
+		// 出现放行、整段截到 220 字符也放行，只有完整 221 字符逐字串才回 400 code=11-128。
+		// 缩写为 DSH 即破坏逐字串，语义不变（实测 200）。
+		"DeepSeek Harness Web GUI",
+		"DSH Web GUI",
 	},
 }
 
