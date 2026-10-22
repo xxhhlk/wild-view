@@ -1,5 +1,9 @@
 # wild-work
 
+> **⚠️ 项目状态（2026-10-23）**：本人已切换到 **magpie AI 网关**，本项目此后**不再更新**（上游
+> `rockswang/wild-work` 也已归档，本 fork 仅作为存档保留）。现有功能可继续正常使用，但不再修复
+> 新故障、不再跟进上游接口与风控变化。
+
 > 多渠道账号聚合桌面工具——把 WorkBuddy(CodeBuddy) 国内版/国际版、TraeWork、QoderCN、QoderCOM（国际版）、千问办公、MonkeyCode 平台托管模型、小浣熊、Loomy（讯飞）、智谱清言、Cline（官方 API Key 免费池）、华为云果办 OfficeAce 的多个账号聚合成一个 OpenAI 兼容 API，并额外提供**无需账号**的 OpenCodeZen 匿名免费通道，双击启动，浏览器管理。
 
 [![GitHub](https://img.shields.io/badge/GitHub-rockswang%2Fworkbuddy--wild-blue)](https://github.com/rockswang/workbuddy-wild)
