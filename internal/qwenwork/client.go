@@ -443,9 +443,8 @@ func displayName(m modelEntry) string {
 // chatMode 网页 /api/chat-modes 单条（qwork scene）。
 type chatMode struct {
 	Key            string `json:"key"`
-	PriceFactor    float64
-	Factor         float64 `json:"price_factor"`
-	CostFactor     float64 `json:"cost_factor"`
+	Factor         json.RawMessage `json:"price_factor"`
+	CostFactor     json.RawMessage `json:"cost_factor"`
 	Enable         bool    `json:"enable"`
 	IsNew          bool    `json:"is_new"`
 	MaxInputTokens int64   `json:"max_input_tokens"`
@@ -466,15 +465,19 @@ func (c *Client) FetchModelPricing(a *auth.Auth) ([]provider.ModelPricing, error
 					if m.Key == "" || !m.Enable {
 						continue
 					}
-					rate := m.Factor
-					if rate == 0 {
-						rate = m.CostFactor
+					factor := m.Factor
+					if len(factor) == 0 || string(factor) == "null" {
+						factor = m.CostFactor
+					}
+					var rate float64
+					explicit := len(factor) > 0 && string(factor) != "null" && json.Unmarshal(factor, &rate) == nil && rate >= 0
+					if !explicit {
+						rate = 0
 					}
 					note := ""
 					if m.IsNew {
 						note = "新档位"
 					}
-					explicit := true
 					out = append(out, provider.ModelPricing{
 						Model:    m.Key,
 						Channel:  ChannelName,

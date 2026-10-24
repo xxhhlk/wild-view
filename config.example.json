@@ -1,7 +1,7 @@
 {
   "listen": {
     "host": "127.0.0.1",
-    "port": 7863
+    "port": 7864
   },
   "api_key": "WildWorkAPI",
   "admin_password": "",
@@ -16,7 +16,6 @@
   },
   "schedule": {
     "checkin_times": ["09:00", "21:00"],
-    "keepalive_hours": [22],
     "expiring_threshold_hours": 24
   },
   "upstream": {
@@ -45,6 +44,7 @@
   "model_fallback": [],
   "custom_channels": [],
   "features": {
-    "loop_guard": true
+    "loop_guard": true,
+    "checkin_enabled": false
   }
 }

@@ -1338,6 +1338,15 @@ async function saveTimes(times) {
   } catch (e) { toast(e.message); }
 }
 
+// ---------- 纯签到开关（设置弹层内，切换立即保存） ----------
+async function toggleCheckinEnabled() {
+  try {
+    await api("/api/config/checkin_enabled", { enabled: $("chkCheckinEnabled").checked });
+    state.checkin_enabled = $("chkCheckinEnabled").checked;
+    toast("设置已保存");
+  } catch (e) { toast(e.message); loadState(); }
+}
+
 // ---------- 开机自启（设置弹层内，切换立即保存） ----------
 async function toggleAutostart() {
   try {
@@ -1423,7 +1432,8 @@ function openSettings() {
   renderBackupProxy();
   $("oczenKeyInput").value = state.oczen_api_key || ""; // 回显脱敏值；未改动则原样回传，后端按脱敏值识别为「未变」
   $("oczenKeyInput").dataset.touched = "";
-  // 自动签到 + 开机自启 + 临期阈值
+  // 纯签到 + 开机自启 + 临期阈值
+  $("chkCheckinEnabled").checked = !!state.checkin_enabled;
   $("chkAutostart").checked = !!state.autostart;
   $("selExpiring").value = String(state.expiring_days || 1);
   syncListenRisk(); // 按当前监听地址初始化警告条与必填星号
@@ -1761,6 +1771,7 @@ function bind() {
     const row = e.target.closest(".ms-row");
     if (row) { e.preventDefault(); copyText(row.dataset.mid, "模型 ID"); }
   };
+  $("chkCheckinEnabled").onchange = toggleCheckinEnabled;
   $("chkAutostart").onchange = toggleAutostart;
   $("btnAdminLogout").onclick = () => logout();
   $("btnClearAdminPass").onclick = clearAdminPassword;

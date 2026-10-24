@@ -489,6 +489,12 @@ func main() {
 	if err != nil {
 		fatal("解析签到时间失败：%v", err)
 	}
+	// 查看器默认不执行任何签到；仅在面板显式开启后按配置时间运行纯签到。
+	if !cfg.Features.CheckinEnabled {
+		checkinMinutes = []int{}
+	}
+	// 聊天保活已移除：查看器不得为维持会话向上游发起对话。
+	keepaliveHours := []int{}
 
 	// Qoder 双区签到窗口（对齐上游 qoder2api 的调度机制）：
 	// 每日 10:00（UTC+8）开放，活动可能在整点之后才创建，故 10:00–12:00 每分钟重试。
@@ -504,18 +510,19 @@ func main() {
 		log.Printf("ledger init failed（统计功能不可用）: %v", lgerr)
 	}
 
-	wbSch := scheduler.New(scheduler.Config{Pool: wbPool, Upstream: wbUp, Name: "workbuddy", CheckinMinutes: checkinMinutes, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
-	trSch := scheduler.New(scheduler.Config{Pool: trPool, Upstream: trUp, Name: "traework", CheckinMinutes: checkinMinutes, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+	wbSch := scheduler.New(scheduler.Config{Pool: wbPool, Upstream: wbUp, Name: "workbuddy", CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
+	trSch := scheduler.New(scheduler.Config{Pool: trPool, Upstream: trUp, Name: "traework", CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// Qoder 无签到活动：调度器只做 token keepalive（每日 refresh 保活）。
 	// CheckinMinutes 用显式空切片关闭（传 nil 会被 scheduler.New 补成默认 9:00/21:00）。
-	qdSch := scheduler.New(scheduler.Config{Pool: qdPool, Upstream: qdUp, Name: "qoder", CheckinMinutes: []int{}, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+	qdSch := scheduler.New(scheduler.Config{Pool: qdPool, Upstream: qdUp, Name: "qoder", CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// WorkBuddy 国际版：无显式签到（ActivitiesOnly 模式）。
 	// 定时仍对每个账号调用 DailyCheckin，其实现为「免费模型对话保活 + 签到探测」；
 	// 不记录/上报签到状态，保持对用户透明。
 	// Keepalive 关闭（token 有效期 365 天，无需每日刷新），用显式空切片关闭
 	// （传 nil 会被 scheduler.New 补成默认 22:00）。
 	wbaSch := scheduler.New(scheduler.Config{Pool: wbaPool, Upstream: wbaUp, Name: "workbuddyai",
-		CheckinMinutes: checkinMinutes, KeepaliveHours: []int{}, ActivitiesOnly: true, Ledger: lg})
+		// 该渠道的「签到」实为免费模型对话保活，查看器不产生会话 ⇒ 显式关闭。
+		CheckinMinutes: []int{}, KeepaliveHours: []int{}, ActivitiesOnly: true, Ledger: lg})
 	// 千问办公：无签到活动（每日积分服务端被动发放，无需保活/领取）；
 	// CheckinMinutes + KeepaliveHours 均为显式空切片，本渠道没有任何定时任务
 	// （token 由 deviceToken/refresh 按需轮换，定时保活反而会与千问办公 App
@@ -526,9 +533,9 @@ func main() {
 	// QoderCN：仅 campaigns 活动路径（legacy daily-check-in 已 DISABLED，其 claim 恒返回
 	// 409 会造成「假成功」，故不再使用）。签到窗口对齐上游 qoder2api：10:00 开放，
 	// 活动可能在整点后才创建，故 10:00–12:00 之间每分钟重试，直到真正领到或超时。
-	qcnSch := scheduler.New(scheduler.Config{Pool: qcnPool, Upstream: qcnUp, Name: "qodercn", CheckinMinutes: []int{qoderCheckinMinute}, CheckinRetryUntil: qoderCheckinRetryUntil, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+	qcnSch := scheduler.New(scheduler.Config{Pool: qcnPool, Upstream: qcnUp, Name: "qodercn", CheckinMinutes: []int{qoderCheckinMinute}, CheckinRetryUntil: qoderCheckinRetryUntil, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// QoderCOM：仅 campaigns 活动路径（无 daily-check-in）；其余同 QoderCN。
-	qcmSch := scheduler.New(scheduler.Config{Pool: qcmPool, Upstream: qcmUp, Name: "qodercom", CheckinMinutes: []int{qoderCheckinMinute}, CheckinRetryUntil: qoderCheckinRetryUntil, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+	qcmSch := scheduler.New(scheduler.Config{Pool: qcmPool, Upstream: qcmUp, Name: "qodercom", CheckinMinutes: []int{qoderCheckinMinute}, CheckinRetryUntil: qoderCheckinRetryUntil, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// MonkeyCode：已实现签到（控制台 Cookie 走 POST {console}/api/v1/users/wallet/checkin，
 	// 见 internal/monkeycode/checkin.go）。签到时刻用全局配置；**不设 CheckinRetryUntil**
 	// ——它是「直接领一次」的接口，没有 Qoder 那种「活动整点后才创建」的延迟，
@@ -562,7 +569,7 @@ func main() {
 	// OfficeAce：有每日签到（bonus/claim）但要先有临时凭据（V11 签名），保活用于续期。
 	// CheckinMinutes 用全局签到时间；KeepaliveHours 用配置保活时段（临时凭据约 2h 到期）。
 	oaSch := scheduler.New(scheduler.Config{Pool: oaPool, Upstream: oaUp, Name: "officeace",
-		CheckinMinutes: checkinMinutes, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+		CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// OpenCodeZen 匿名：无账号、无签到、无 token 可保活（凭证是常量 public）。
 	// CheckinMinutes/KeepaliveHours 均为显式空切片 → 调度器不发生任何上游调用。
 	ocSch := scheduler.New(scheduler.Config{Pool: ocPool, Upstream: ocUp, Name: "oczen",
@@ -575,11 +582,11 @@ func main() {
 	// MiniMax：有每日签到（7 天面板，claim 幂等判据是响应里的 claim_result），
 	// 也需要 token 保活（refresh_token 会轮换，刷新后必须落盘）。
 	mimSch := scheduler.New(scheduler.Config{Pool: mimPool, Upstream: mimUp, Name: "minimax",
-		CheckinMinutes: checkinMinutes, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+		CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// LobsterAI：有每日签到（三步：slot → context → check_in，客户端幂等键），
 	// 也需要 token 保活（refresh 会轮换，刷新后必须落盘）。
 	lobSch := scheduler.New(scheduler.Config{Pool: lobPool, Upstream: lobUp, Name: "lobsterai",
-		CheckinMinutes: checkinMinutes, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+		CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// ZCode：**无签到**（积分领取依赖阿里云验证码 + headful 浏览器，本仓不实现；
 	// DailyCheckin 返回明确的「不支持」错误而不是伪造成功），且凭据**不可续期**
 	// （JWT 无 exp）⇒ 定时任务全关。必须传显式空切片（R39）：传 nil 会被补成默认
@@ -590,17 +597,18 @@ func main() {
 	// ⇒ 只开保活；CheckinMinutes 用显式空切片关闭（R39：传 nil 会被补成默认 9:00/21:00，
 	// 每天空跑两次必然失败的签到并污染面板）。
 	gemSch := scheduler.New(scheduler.Config{Pool: gemPool, Upstream: gemUp, Name: "gemini",
-		CheckinMinutes: []int{}, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+		CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// CodeArts：有每日签到（三步，走 HMAC 签名；本包实现了 CheckinReporter/CheckinGranter，
 	// 签到结果按结构化状态上报），也需要 token 保活（续期后必须落盘，不变量 20）。
 	caSch := scheduler.New(scheduler.Config{Pool: caPool, Upstream: caUp, Name: "codearts",
-		CheckinMinutes: checkinMinutes, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+		CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// 智谱清言：签到与对话联动（当日需先对话才能领打卡进度），故保活与签到
 	// 合成一个流程（glm.Client.Keepalive 先发最小对话再签到）。
 	// 用 DailyCheckin 通道驱动：CheckinMinutes 用全局签到时间，
 	// KeepaliveHours 也用同一时段（保活=签到，不必额外一次）。
 	glmSch := scheduler.New(scheduler.Config{Pool: glmPool, Upstream: glmUp, Name: "glm",
-		CheckinMinutes: checkinMinutes, KeepaliveHours: cfg.Schedule.KeepaliveHours, Ledger: lg})
+		// 智谱清言的签到依赖先发一轮最小对话（keepaliveChat），查看器不产生会话 ⇒ 显式关闭。
+		CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg})
 
 	runtimes := map[provider.Kind]*server.Runtime{
 		provider.WorkBuddy: {Kind: provider.WorkBuddy, Pool: wbPool, Upstream: wbUp, StaticModels: server.WorkBuddyStaticModels()},
@@ -800,9 +808,12 @@ func main() {
 		return ocUp.SystemOne(state, questions)
 	})
 	mux := http.NewServeMux()
-	compat.Routes(mux) // POST /v1/responses · /v1/messages · /v1/messages/count_tokens · /v1/systemone
+	// 查看器不提供任何会话转发入口：/v1/* 与旧网关状态一律 404。
+	// 必须注册在 "/" 之前——ServeMux 取最长前缀匹配，否则会被静态站点兜底成 HTML 200。
+	mux.HandleFunc("/v1/", notFound)
+	mux.HandleFunc("/status", notFound)
 	mux.Handle("/", inner)
-	log.Printf("wild-work revision=%s 数据目录=%s", buildRevision(), wd)
+	log.Printf("wild-view revision=%s 数据目录=%s", buildRevision(), wd)
 	if compat != nil {
 		log.Printf("三接口兼容层已启用：default_channel=%q max_tokens_cap=%d reasoning_effort=%q responses_reasoning_summary=%q model_map=%d 条",
 			cfg.Compat.DefaultChannel, cfg.Compat.MaxTokensCap, cfg.Compat.ReasoningEffort,
@@ -828,7 +839,7 @@ func main() {
 		// 监听失败必须终止：只记日志继续跑会让调度器与托盘照常起来，
 		// 表现为「面板看着一切正常、其实是别的实例在服务本端口」，
 		// 而两个进程共享同一数据目录，会重复签到并互相覆盖刷新出的 token。
-		fatal("监听 %s 失败：%v\n\n该端口可能已被占用（例如已有一个 wild-work 实例在运行）。\n"+
+		fatal("监听 %s 失败：%v\n\n该端口可能已被占用（例如已有一个 wild-view 实例在运行）。\n"+
 			"请先退出已有实例，或改用 config.json 的 listen.port（也可用环境变量 WILDWORK_LISTEN）。",
 			cfg.Listen.Addr(), err)
 	}
@@ -907,9 +918,7 @@ func main() {
 	if noTray {
 		// 无头模式：打印信息，阻塞等待信号
 		addr := cfg.Listen.Addr()
-		fmt.Printf("wild-work headless mode started\n")
-		fmt.Printf("  OpenAI API:    http://%s:%d/v1\n", displayHost(cfg), cfg.Listen.Port)
-		fmt.Printf("  API-Key:       %s\n", cfg.APIKey)
+		fmt.Printf("wild-view headless mode started\n")
 		fmt.Printf("  Web UI (本机): http://%s:%d/\n", openHost(cfg), cfg.Listen.Port)
 		fmt.Printf("  Listen:        %s\n", addr)
 		if appInst.PanelAuthEnabled() {
@@ -939,7 +948,7 @@ func main() {
 			}
 		}()
 		// 托盘提示带上监听地址：启动弹窗可能被忽略或关掉，悬停也能看到地址。
-		trayTip := fmt.Sprintf("wild-work — 渠道聚合代理\nhttp://%s:%d", displayHost(cfg), cfg.Listen.Port)
+		trayTip := fmt.Sprintf("wild-view — 账号额度与模型倍率查看器\nhttp://%s:%d", displayHost(cfg), cfg.Listen.Port)
 		systray.Run(trayIconICO, trayTip, systray.Actions{
 			OpenUI: func() {
 				// 本机打开面板：通配监听时浏览器访问不了 0.0.0.0，用局域网 IP 兜底
@@ -951,7 +960,7 @@ func main() {
 				}
 			},
 			Quit: func() {
-				if platform.AskYesNo("wild-work", "确定退出 wild-work 吗？") {
+				if platform.AskYesNo("wild-view", "确定退出 wild-view 吗？") {
 					// 先摘托盘图标：NIM_DELETE 由托盘消息循环执行，返回即已回收。
 					// 直接 os.Exit 会跳过这一步，Windows 任务栏留下幽灵图标。
 					systray.Quit(3 * time.Second)
@@ -966,7 +975,7 @@ func main() {
 				if autostart {
 					return
 				}
-				platform.Notify("wild-work 已启动",
+				platform.Notify("wild-view 已启动",
 					fmt.Sprintf("OpenAI 兼容 API 地址：http://%s:%d\n点击托盘图标或菜单打开主界面。",
 						displayHost(cfg), cfg.Listen.Port))
 			},
@@ -986,9 +995,12 @@ func main() {
 //     且写到包内会在替换/升级 app 时连同账号一起丢失；
 //   - 其余形态（CLI 二进制、Windows 便携包、Linux）沿用 exe 所在目录。
 func workDir() string {
-	if v := os.Getenv("WILDWORK_HOME"); v != "" {
-		if err := os.MkdirAll(v, 0o755); err == nil {
-			return v
+	// WILDVIEW_HOME 优先；保留 WILDWORK_HOME 仅用于从旧版本平滑迁移数据目录。
+	for _, env := range []string{"WILDVIEW_HOME", "WILDWORK_HOME"} {
+		if v := os.Getenv(env); v != "" {
+			if err := os.MkdirAll(v, 0o755); err == nil {
+				return v
+			}
 		}
 	}
 	exe, err := os.Executable()
@@ -998,7 +1010,7 @@ func workDir() string {
 	dir := filepath.Dir(exe)
 	if strings.Contains(dir, ".app/Contents/MacOS") {
 		if home, err := os.UserHomeDir(); err == nil {
-			p := filepath.Join(home, "Library", "Application Support", "WildWork")
+			p := filepath.Join(home, "Library", "Application Support", "WildView")
 			if err := os.MkdirAll(p, 0o755); err == nil {
 				return p
 			}
@@ -1067,11 +1079,18 @@ func openHost(cfg *config.Config) string {
 	return cfg.Listen.Host
 }
 
+// notFound 统一返回 404 JSON：已下线的转发入口不得回落为静态页面 200。
+func notFound(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(`{"error":{"message":"not found: this build is a read-only viewer"}}`))
+}
+
 // fatal 记录日志并弹出系统提示后退出。
 func fatal(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("%s", msg)
-	platform.InfoBox("wild-work", msg)
+	platform.InfoBox("wild-view", msg)
 	os.Exit(1)
 }
 

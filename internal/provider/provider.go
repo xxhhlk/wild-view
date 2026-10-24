@@ -545,6 +545,29 @@ func (p ModelPricing) IsExplicit() bool {
 	return p.Explicit == nil || *p.Explicit
 }
 
+// QueryClient is the read-only account and catalog capability used by the viewer.
+type QueryClient interface {
+	RefreshToken(a *auth.Auth) error
+	FetchModels(a *auth.Auth) ([]ModelInfo, error)
+	FetchModelPricing(a *auth.Auth) ([]ModelPricing, error)
+	UserResourceDetail(a *auth.Auth) (int64, []ResourceItem, error)
+}
+
+// CheckinClient is deliberately separate from query capabilities.
+type CheckinClient interface {
+	DailyCheckin(a *auth.Auth) error
+}
+
+// SupportsPureCheckin lists channels whose check-in never creates a chat.
+func SupportsPureCheckin(k Kind) bool {
+	switch k {
+	case WorkBuddy, WorkBuddyAI, TraeWork, QoderCN, QoderCOM, Raccoon, Loomy, MonkeyCode, GLM, OfficeAce, Minimax, LobsterAI, CodeArts:
+		return true
+	default:
+		return false
+	}
+}
+
 // Upstream 是 server/scheduler 依赖的最小上游能力集合。
 type Upstream interface {
 	RefreshToken(a *auth.Auth) error

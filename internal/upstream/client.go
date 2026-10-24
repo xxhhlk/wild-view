@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -818,14 +820,11 @@ func (c *Client) FetchModelPricing(a *auth.Auth) ([]provider.ModelPricing, error
 	}
 	out := make([]provider.ModelPricing, 0, len(env.Data.Models))
 	for _, m := range env.Data.Models {
-		rate := parseCredits(m.Credits)
-		if rate <= 0 && m.ID != "auto" {
-			continue // hunyuan-chat 等非计费模型
+		if strings.TrimSpace(m.ID) == "" {
+			continue
 		}
+		rate, explicit := parseCreditsValue(m.Credits)
 		note, color := parseBadge(m.Tags)
-		// auto 调度器无 credits 字段：标记为非显式倍率，
-		// 避免费率面板把「缺失→0」误显示为 Free。
-		explicit := strings.TrimSpace(m.Credits) != ""
 		out = append(out, provider.ModelPricing{
 			Model:    m.ID,
 			Channel:  "workbuddy",
@@ -843,17 +842,19 @@ func (c *Client) FetchModelPricing(a *auth.Auth) ([]provider.ModelPricing, error
 
 // parseCredits 解析 "x0.08 credits" → 0.08。
 func parseCredits(s string) float64 {
+	v, _ := parseCreditsValue(s)
+	return v
+}
+
+func parseCreditsValue(s string) (float64, bool) {
 	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	// 去掉 "x" 前缀和 " credits" 后缀
 	s = strings.TrimPrefix(s, "x")
 	s = strings.TrimSuffix(s, " credits")
-	s = strings.TrimSpace(s)
-	var v float64
-	fmt.Sscanf(s, "%f", &v)
-	return v
+	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
 // parseBadge 从上流 tags 中提取促销标签与颜色。

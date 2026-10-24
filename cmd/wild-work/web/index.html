@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>wild-work 管理面板</title>
+<title>wild-view 账号额度与模型倍率</title>
 <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -14,11 +14,11 @@
     <div class="brand">
       <img class="logo" src="./logo64.png" alt="logo" onerror="this.style.display='none'">
       <div class="brand-text">
-        <div class="title">wild-work <span class="ver" id="ver"></span></div>
+        <div class="title">wild-view <span class="ver" id="ver"></span></div>
         <div class="sub" id="serverLine"></div>
       </div>
     </div>
-    <div class="top-info">
+    <div class="top-info" style="display:none">
       <div class="info-cell">
         <span class="info-label">OpenAI接口</span>
         <code class="info-value" id="apiAddr" title="点击复制地址；进入设置修改"><span class="val"></span></code>
@@ -39,7 +39,7 @@
   <section class="panel">
     <div class="main-tabs">
       <button class="mtab active" data-mtab="accounts">账号管理</button>
-      <button class="mtab" data-mtab="usage">用量与流水 <span class="ver" id="usageSince"></span></button>
+      <button class="mtab" data-mtab="usage">余额变化 <span class="ver" id="usageSince"></span></button>
     </div>
 
     <!-- ===== Tab: 账号管理 ===== -->
@@ -96,23 +96,23 @@
       </div>
     </div>
     <div class="usage-cards">
-      <div class="ucard"><div class="ucard-label">Token 总量</div><div class="ucard-value" id="ucTokens">—</div></div>
-      <div class="ucard"><div class="ucard-label">请求数</div><div class="ucard-value" id="ucReqs">—</div></div>
+      <div class="ucard" style="display:none"><div class="ucard-label">Token 总量</div><div class="ucard-value" id="ucTokens">—</div></div>
+      <div class="ucard" style="display:none"><div class="ucard-label">请求数</div><div class="ucard-value" id="ucReqs">—</div></div>
       <div class="ucard"><div class="ucard-label">积分消耗</div><div class="ucard-value warn" id="ucSpend">—</div></div>
       <div class="ucard"><div class="ucard-label">积分入项</div><div class="ucard-value ok" id="ucEarn">—</div></div>
     </div>
     <div class="tabs">
-      <button class="tab active" data-tab="token">Token 用量</button>
-      <button class="tab" data-tab="credit">积分流水</button>
+      <button class="tab" data-tab="token" style="display:none">Token 用量</button>
+      <button class="tab active" data-tab="credit">余额变化</button>
     </div>
-    <div class="tab-body" id="tabToken">
+    <div class="tab-body hidden" id="tabToken">
       <div id="usageChart" class="chart-box">图表库加载中…</div>
       <table class="table" id="tblModels">
         <thead><tr><th>模型</th><th>渠道</th><th class="num">请求数</th><th class="num">Token</th><th class="num">日均</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
-    <div class="tab-body hidden" id="tabCredit">
+    <div class="tab-body" id="tabCredit">
       <div id="creditChart" class="chart-box">图表库加载中…</div>
       <div class="pager" id="recentPager">
         <button class="btn small" id="pgPrev">‹ 上一页</button>
@@ -133,7 +133,7 @@
     <div id="feesBox" class="fees"></div>
   </section>
 
-  <div class="footer">wild-work — 多渠道账号聚合 · 仅供个人学习 · 右键托盘图标退出</div>
+  <div class="footer">wild-view — 账号额度与模型倍率查看器 · 仅供个人学习 · 右键托盘图标退出</div>
 </div>
 
 <!-- 添加账号确认弹层 -->
@@ -335,9 +335,14 @@
         </div>
       </div>
 
-      <!-- 自动签到与开机自启 -->
+      <!-- 纯签到与开机自启 -->
       <div class="cfg-section">
-        <div class="cfg-heading">自动签到与开机自启</div>
+        <div class="cfg-heading">纯签到与开机自启</div>
+        <div class="row">
+          <label class="lbl wide" title="开启后仅在下列时间执行不依赖对话的签到">启用纯签到</label>
+          <label class="switch"><input type="checkbox" id="chkCheckinEnabled"><span class="slider"></span></label>
+          <span class="hint" style="margin-left:8px">默认关闭；不包含任何聊天保活</span>
+        </div>
         <div class="row">
           <label class="lbl wide">签到时间</label>
           <div id="timesBox" class="times"></div>
@@ -348,7 +353,7 @@
           </span>
           <button class="icon-btn" id="btnAddTime" title="增加一个签到时间">＋</button>
         </div>
-        <div class="hint">保活 22:00 自动 · 下次 <span id="nextCheckin">-</span></div>
+        <div class="hint">下次定时检查 <span id="nextCheckin">-</span></div>
         <div class="row" style="margin-top:8px">
           <label class="lbl wide" title="到期日在此范围内的积分视为临期，调度器优先消耗，减少到期作废">临期阈值</label>
           <select id="selExpiring" class="input" style="width:100px">

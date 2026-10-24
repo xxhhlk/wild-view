@@ -503,7 +503,9 @@ func (a *App) SetCustomChannelsSyncer(fn func(channels []custom.ChannelConfig)) 
 // 自定义渠道无签到活动（R66）；内建名单固定，故抽成无状态的包级函数（可脱离 App 断言），
 // 方法体仅补上「是否自定义渠道」这一动态判定。
 func noExplicitCheckin(k provider.Kind) bool {
-	return k == provider.WorkBuddyAI || k == provider.QwenWork || k == provider.Oczen || k == provider.Kilo || k == provider.ZCode || k == provider.Gemini || k == provider.Cline
+	// GLM 的每日签到必须先发一轮最小对话（keepaliveChat），属于查看器明确移除的
+	// 聊天保活，故不提供手动/批量入口。
+	return k == provider.WorkBuddyAI || k == provider.GLM || k == provider.QwenWork || k == provider.Oczen || k == provider.Kilo || k == provider.ZCode || k == provider.Gemini || k == provider.Cline
 }
 
 func (a *App) noExplicitCheckinKind(k provider.Kind) bool {
@@ -1186,6 +1188,9 @@ func (a *App) completeRaccoonLogin(r loginraccoon.Result) {
 
 // firstCheckinRaccoon 新账号首次签到 + 积分兜底（幂等：已领过时上游返回空 popups）。
 func (a *App) firstCheckinRaccoon(uid string) {
+	if !a.CheckinEnabled() {
+		return
+	}
 	rt := a.runtime(provider.Raccoon)
 	if rt == nil || rt.Scheduler == nil {
 		return
@@ -1262,6 +1267,9 @@ func (a *App) completeLoomyLogin(r loginloomy.Result) {
 // Ledger.RecordCheckinEarn 进流水；随后独立刷一次余额，保证新账号首屏数字正确。
 // 幂等：未达档位时上游返回 granted=false，不会重复发放。
 func (a *App) firstCheckinLoomy(uid string) {
+	if !a.CheckinEnabled() {
+		return
+	}
 	rt := a.runtime(provider.Loomy)
 	if rt == nil || rt.Scheduler == nil {
 		return
@@ -2591,6 +2599,27 @@ func (a *App) SetLoopGuard(on bool) error {
 	return nil
 }
 
+// SetCheckinEnabled 纯签到总开关：保存配置并即时生效。
+// 关闭后手动与定时签到都不再执行；查看器不会用任何聊天保活替代签到。
+func (a *App) SetCheckinEnabled(on bool) error {
+	a.mu.Lock()
+	a.cfg.Features.CheckinEnabled = on
+	err := config.Save(a.cfg, a.cfgPath)
+	a.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	log.Printf("纯签到已%s", map[bool]string{true: "开启", false: "关闭"}[on])
+	return nil
+}
+
+// CheckinEnabled 报告纯签到总开关状态。
+func (a *App) CheckinEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.Features.CheckinEnabled
+}
+
 // SetListen 修改 API 监听主机 + 端口：保存配置并热切换监听。
 func (a *App) SetListen(host string, port int) error {
 	if port <= 0 || port > 65535 {
@@ -3379,6 +3408,9 @@ type State struct {
 
 	// LoopGuard 思考链死循环检测（发癫拦截）是否开启（只读，保存走 POST /api/config/loop_guard）。
 	LoopGuard bool `json:"loop_guard"`
+	// CheckinEnabled 纯签到总开关（只读，保存走 POST /api/config/checkin_enabled）。
+	// 关闭时手动签到与定时签到一律不执行。
+	CheckinEnabled bool `json:"checkin_enabled"`
 
 	// ModelFallback 模型降级链（保存走 POST /api/config/model_fallback）。
 	ModelFallback []config.ModelFallbackRule `json:"model_fallback"`
@@ -3419,6 +3451,7 @@ func (a *App) GetState() State {
 		Running:        a.ServerRunning(),
 		LanIP:          lanIP(),
 		LoopGuard:      a.cfg.Features.LoopGuard,
+		CheckinEnabled: a.cfg.Features.CheckinEnabled,
 	}
 	st.ModelFallback = a.cfg.ModelFallback
 	st.ReasoningEfforts = a.cfg.ReasoningEfforts
@@ -3882,6 +3915,10 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /api/account/checkin", func(w http.ResponseWriter, r *http.Request) {
+		if !a.CheckinEnabled() {
+			apiError(w, http.StatusBadRequest, "签到未开启：请先在设置中启用纯签到")
+			return
+		}
 		var req struct {
 			UID string `json:"uid"`
 		}
@@ -3894,6 +3931,10 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, res)
 	})
 	mux.HandleFunc("POST /api/account/checkin_all", func(w http.ResponseWriter, r *http.Request) {
+		if !a.CheckinEnabled() {
+			apiError(w, http.StatusBadRequest, "签到未开启：请先在设置中启用纯签到")
+			return
+		}
 		results := a.CheckinAll()
 		writeJSON(w, http.StatusOK, map[string]any{"results": results})
 	})
@@ -3978,6 +4019,17 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("POST /api/config/checkin_enabled", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := a.SetCheckinEnabled(req.Enabled); err != nil {
+			apiError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "checkin_enabled": a.CheckinEnabled()})
 	})
 	mux.HandleFunc("POST /api/config/loop_guard", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

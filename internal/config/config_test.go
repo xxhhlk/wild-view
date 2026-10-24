@@ -9,7 +9,7 @@ import (
 
 func TestDefault(t *testing.T) {
 	c := Default()
-	if c.Listen.Addr() != "127.0.0.1:7863" {
+	if c.Listen.Addr() != "127.0.0.1:7864" {
 		t.Errorf("listen=%s", c.Listen.Addr())
 	}
 	if c.APIKey != "WildWorkAPI" {
@@ -87,7 +87,7 @@ func TestSaveRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c2.Listen.Addr() != "127.0.0.1:7863" {
+	if c2.Listen.Addr() != "127.0.0.1:7864" {
 		t.Errorf("addr=%s", c2.Listen.Addr())
 	}
 	if len(c2.Schedule.CheckinHours) != 2 || c2.Schedule.CheckinHours[0] != 8 {

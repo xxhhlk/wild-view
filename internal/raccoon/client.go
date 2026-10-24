@@ -464,7 +464,7 @@ type catalogModel struct {
 	ModelName         string   `json:"model_name"`
 	Description       string   `json:"description"`
 	DisplayDesc       string   `json:"display_description"`
-	BillingMultiplier float64  `json:"billing_multiplier"`
+	BillingMultiplier json.RawMessage `json:"billing_multiplier"`
 	Tags              []string `json:"tags"`
 	Params            struct {
 		ContextWindow int64 `json:"context_window"`
@@ -554,7 +554,6 @@ func (c *Client) FetchModelPricing(a *auth.Auth) ([]provider.ModelPricing, error
 	if err != nil {
 		return nil, err
 	}
-	explicit := true
 	out := make([]provider.ModelPricing, 0, len(models))
 	for _, m := range models {
 		id := strings.TrimSpace(m.ModelName)
@@ -564,10 +563,15 @@ func (c *Client) FetchModelPricing(a *auth.Auth) ([]provider.ModelPricing, error
 		if id == "" {
 			continue
 		}
+		var rate float64
+		explicit := len(m.BillingMultiplier) > 0 && string(m.BillingMultiplier) != "null" && json.Unmarshal(m.BillingMultiplier, &rate) == nil && rate >= 0
+		if !explicit {
+			rate = 0
+		}
 		out = append(out, provider.ModelPricing{
 			Model:    id,
 			Channel:  ChannelName,
-			Rate:     m.BillingMultiplier,
+			Rate:     rate,
 			Explicit: &explicit,
 		})
 	}

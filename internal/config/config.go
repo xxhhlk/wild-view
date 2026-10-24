@@ -43,7 +43,7 @@ func (l Listen) Addr() string {
 	host := l.Host
 	port := l.Port
 	if port <= 0 {
-		port = 7863
+		port = 7864
 	}
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		host = "[" + host + "]"
@@ -282,11 +282,14 @@ type Config struct {
 	// 面板可视化编辑，保存走 POST /api/config/reasoning_efforts。
 	ReasoningEfforts map[string]string `json:"reasoning_efforts,omitempty"`
 
-	// Features 功能开关（面板「设置」可切换，默认全部开启）。
+	// Features 功能开关（面板「设置」可切换）。
 	Features struct {
 		// LoopGuard 思考链死循环检测（发癫拦截）：流式生成中检测推理复读/空转，
 		// 命中即中断 SSE 并返回错误，由下游 agent 自行重试。默认 true。
 		LoopGuard bool `json:"loop_guard"`
+		// CheckinEnabled 纯签到总开关。查看器默认关闭；开启后仅在配置的签到时间
+		// 执行不依赖对话的签到，任何聊天保活都不会运行。
+		CheckinEnabled bool `json:"checkin_enabled"`
 	} `json:"features"`
 
 	// CustomChannels 自定义第三方 OpenAI 兼容渠道列表（R66）。
@@ -356,7 +359,7 @@ type ModelFallbackRule struct {
 // Default 默认配置。
 func Default() *Config {
 	c := &Config{
-		Listen:    Listen{Host: "127.0.0.1", Port: 7863},
+		Listen:    Listen{Host: "127.0.0.1", Port: 7864},
 		APIKey:    "WildWorkAPI",
 		AuthDir:   "./auths",
 		StateFile: "./data/state.json",
@@ -722,7 +725,7 @@ func (c *Config) normalize() error {
 		c.Server.MaxRequestBodyMB = 1024
 	}
 	if c.Listen.Port <= 0 {
-		c.Listen.Port = 7863
+		c.Listen.Port = 7864
 	}
 	c.AdminPass = strings.TrimSpace(c.AdminPass)
 	// 备用上游通道：先把旧 `proxies` 段一次性迁移（决议 R57），再校验现值。
