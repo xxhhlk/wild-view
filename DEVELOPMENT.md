@@ -6,7 +6,8 @@
 
 ## 0. 项目速览
 
-- **是什么**：多平台（Win/mac/Linux）系统托盘 daemon + 浏览器 Web UI 的多渠道账号聚合工具。单进程 = HTTP 代理 + 调度器 + 托盘 + 静态 Web UI。
+- **是什么**：账号额度与模型倍率查看器。单进程 = 管理 HTTP 服务 + 纯签到调度 + 托盘 + 静态 Web UI；
+  不提供任何会话转发入口（`/v1/*` 返回 404）。
 - **技术栈**：Go 1.25+ / energye/systray（托盘）/ 纯静态前端 HTML/CSS/JS（go:embed 无构建链）/ 无 wails/WebView2。
 - **模块**：`wild-work`（go.mod module name）。
 - **平台**：Windows（完整）、macOS（代码已写，需 cgo 编译）、Linux（无头模式 `--no-tray`）。
@@ -19,14 +20,14 @@ cmd/wild-work/main.go         # daemon 入口：装配各渠道 Runtime → 启�
 cmd/wild-work/web/             # 纯静态 Web UI（index.html / app.js / style.css）
 cmd/genicon/                   # 图标生成（纯 Go）
 internal/
-├── app/app.go                 # 业务编排：HTTP 管理 API + 登录流程 + 费率缓存 + 日志
+├── app/app.go                 # 业务编排：HTTP 管理 API + 登录流程 + 日志
+├── app/catalog.go             # 模型目录/倍率的账号作用域缓存（按渠道+账号，含时效与错误）
 ├── app/session.go             # 管理面板鉴权：cookie 会话 + 管理员密码 + 登录限流
-├── server/handler.go          # OpenAI 兼容 HTTP handler：前缀路由 + 挑号 + 错误透传（含 SingleAccount 豁免）
-├── gateway/                    # 三接口兼容层（Responses/Anthropic → 内层 Chat）；imageslim.go 做入站图片降采样
-├── pool/pool.go               # 账号池：余额挑号 + 冷却/禁用状态机 + state.json 持久化
-├── scheduler/scheduler.go     # 定时签到 + token 保活 + 冷却解冻
+├── staticmodels/models.go     # 渠道静态模型兜底表（纯数据，无转发依赖）
+├── pool/pool.go               # 账号存储与状态持久化（查看器不再用于路由选号）
+├── scheduler/scheduler.go     # 定时纯签到 + 凭据续期（保活已停用）
 ├── provider/provider.go       # Upstream 接口 + 共享类型（ModelInfo/ModelPricing/ResourceItem）
-├── gateway/                    # 三接口兼容层（Responses / Anthropic）→ 转 Chat 后 in-process 调内层
+
 ├── reasoning/                  # 思考强度归一化（reasoning.go）+ 档位能力表/就近降级（catalog.go）
 ├── upstream/                   # WorkBuddy(CodeBuddy) 上游：chat/billing/auth/模型/定价/脱敏
 ├── workbuddyai/                # WorkBuddy 国际版上游（www.workbuddy.ai，与国内版独立）

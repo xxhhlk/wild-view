@@ -42,11 +42,6 @@ func (a *App) StartStatsFeeders(ctx context.Context) {
 			}
 			now := time.Now()
 			a.stats.ApplyPoll(a.statsAccounts(), now)
-			if a.handler != nil {
-				for ch, st := range a.handler.StickySnapshot() {
-					a.stats.ApplySticky(ch, st.UID, st.Count, st.Max)
-				}
-			}
 			a.feedLedgerExpire(now)
 		}
 		feed() // 启动即喂：面板打开即有数（差值首轮只建基线，消耗从第二轮起记）

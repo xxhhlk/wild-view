@@ -50,7 +50,7 @@ func TestFrontendAPIPathsHaveRoutes(t *testing.T) {
 
 	routes := goRoutePatterns(t)
 	// 注册表下限守门：正则失效同样会假绿。
-	if len(routes) < 40 {
+	if len(routes) < 25 {
 		t.Fatalf("只解析出 %d 条后端路由，疑似判据失效（注册形态变了？）", len(routes))
 	}
 	for _, p := range paths {
@@ -60,14 +60,14 @@ func TestFrontendAPIPathsHaveRoutes(t *testing.T) {
 	}
 }
 
-// goRoutePatterns 从本包与 internal/server 的非测试源码里抓取全部路由注册的路径部分
+// goRoutePatterns 从本包的非测试源码里抓取全部路由注册的路径部分
 // （`mux.HandleFunc("POST /api/x", …)` / `mux.Handle("/api/x", …)` 的第二个参数），
 // 去掉方法前缀后返回集合。cwd 是 internal/app（go test 的包目录），故用相对路径。
 func goRoutePatterns(t *testing.T) map[string]bool {
 	t.Helper()
 	re := regexp.MustCompile(`\.Handle(?:Func)?\("((?:(?:GET|POST|PUT|DELETE|PATCH) )?/[^"]*)"`)
 	out := map[string]bool{}
-	for _, dir := range []string{".", "../server"} {
+	for _, dir := range []string{"."} {
 		ents, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatalf("读目录 %s 失败：%v", dir, err)

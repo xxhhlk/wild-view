@@ -52,7 +52,6 @@ import (
 	"wild-work/internal/raccoon"
 	"wild-work/internal/reasoning"
 	"wild-work/internal/scheduler"
-	"wild-work/internal/server"
 	statsEngine "wild-work/internal/stats"
 	"wild-work/internal/systray"
 	"wild-work/internal/upstream"
@@ -91,7 +90,6 @@ type Options struct {
 	ConfigPath string
 	Config     *config.Config
 	Runtimes   map[provider.Kind]*Runtime
-	Handler    *server.Handler
 	// Ledger 流水记账器（main 装配时创建，与 scheduler 共用同一实例）；nil 时 App 自建。
 	Ledger *ledger.Ledger
 }
@@ -107,7 +105,6 @@ type App struct {
 	// `fatal error: concurrent map read and map write`（不可 recover，daemon 直接死）。
 	runtimes   map[provider.Kind]*Runtime
 	runtimesMu sync.RWMutex
-	handler    *server.Handler    // 内层（保留强类型，用于 SetAPIKey/ChannelModels 等）
 	stats      *statsEngine.Stats // 运行统计引擎（data/stats.json）；nil = 未启用
 	statsStop  chan struct{}
 	httpRoot   http.Handler // 对外暴露的根 handler，可能为外层兼容层 mux（见 SetRootHandler）
@@ -193,7 +190,6 @@ func New(opts Options) (*App, error) {
 		cfgPath:  opts.ConfigPath,
 		cfg:      opts.Config,
 		runtimes: opts.Runtimes,
-		handler:  opts.Handler,
 		auth:     newAuthState(),
 	}
 	a.loginStateFP = filepath.Join(filepath.Dir(opts.Config.StateFile), "login-state.json")
@@ -554,12 +550,9 @@ func (a *App) nextFire() time.Time {
 	return time.Time{}
 }
 
-// SetHandler 注入内层 HTTP handler（在 HandleAPI 注册后调用）。
-func (a *App) SetHandler(h *server.Handler) {
-	a.handler = h
-	if a.httpRoot == nil {
-		a.httpRoot = h
-	}
+// SetHandler 注入对外服务的根 handler（查看器只有静态面板 + 管理 API）。
+func (a *App) SetHandler(h http.Handler) {
+	a.httpRoot = h
 }
 
 // PanelAuthEnabled 管理面板是否启用密码鉴权（供启动提示使用）。
@@ -586,10 +579,10 @@ func (a *App) serveHandler() http.Handler {
 	if a.httpRoot != nil {
 		return a.hostGuard(a.httpRoot)
 	}
-	if a.handler == nil { // 避免 typed-nil 接口导致 http.Server 请求时 panic
-		return nil
-	}
-	return a.hostGuard(a.handler)
+	// 未注入根 handler（单测/嵌入式使用）：只暴露管理 API，绝不回落为转发入口。
+	fallback := http.NewServeMux()
+	a.HandleAPI(fallback)
+	return a.hostGuard(fallback)
 }
 
 // StartServer 按当前配置启动 HTTP 服务。
@@ -2656,8 +2649,7 @@ func (a *App) SetAPIKey(key string) error {
 	if err != nil {
 		return err
 	}
-	a.handler.SetAPIKey(key)
-	log.Printf("API-Key 已更新")
+	log.Printf("API-Key 已保存（查看器不提供转发接口，该值不再参与鉴权）")
 	return nil
 }
 
@@ -2725,10 +2717,6 @@ func (a *App) SetCompat(defaultChannel string, maxTokensCap int, modelMap map[st
 	// 热更新外层兼容层的路由表：不同步的话新映射要重启才生效。
 	if a.compatSyncer != nil {
 		a.compatSyncer(defaultChannel, maxTokensCap, modelMap, summary)
-	}
-	// 默认思考档由内层 handler 在转发前注入，同样需要热更新。
-	if a.handler != nil {
-		a.handler.SetReasoningEffort(effort)
 	}
 	// DeepSeek 思考改写开关作用于渠道层（包级开关），立即生效。
 	upstream.SetDeepseekThinking(deepseekThinking)

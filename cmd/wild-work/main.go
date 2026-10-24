@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -35,16 +34,12 @@ import (
 	"wild-work/internal/cline"
 	"wild-work/internal/codearts"
 	"wild-work/internal/config"
-	"wild-work/internal/custom"
-	"wild-work/internal/devdump"
-	"wild-work/internal/gateway"
 	"wild-work/internal/gemini"
 	"wild-work/internal/glm"
 	"wild-work/internal/kilo"
 	"wild-work/internal/ledger"
 	"wild-work/internal/lobsterai"
 	"wild-work/internal/loomy"
-	"wild-work/internal/loopguard"
 	"wild-work/internal/minimax"
 	"wild-work/internal/monkeycode"
 	"wild-work/internal/oczen"
@@ -57,10 +52,8 @@ import (
 	"wild-work/internal/qodercom"
 	"wild-work/internal/qwenwork"
 	"wild-work/internal/raccoon"
-	"wild-work/internal/reasoning"
 	"wild-work/internal/scheduler"
-	"wild-work/internal/server"
-	"wild-work/internal/stats"
+	"wild-work/internal/staticmodels"
 	"wild-work/internal/systray"
 	"wild-work/internal/traework"
 	"wild-work/internal/upstream"
@@ -149,11 +142,6 @@ func main() {
 	}
 	if cfg.AdminPass != "" && len(cfg.AdminPass) < 8 {
 		log.Printf("警告：管理员密码不足 8 位，建议使用更长口令（面板鉴权已生效）")
-	}
-	// 思考链死循环检测（发癫拦截）开关：启动时按配置初始化，面板可运行时切换。
-	loopguard.SetEnabled(cfg.Features.LoopGuard)
-	if !cfg.Features.LoopGuard {
-		log.Printf("思考链死循环检测已关闭（features.loop_guard=false）")
 	}
 	_ = os.MkdirAll(cfg.AuthDir, 0o755)
 	_ = os.MkdirAll(filepath.Dir(cfg.StateFile), 0o755)
@@ -442,49 +430,6 @@ func main() {
 	// 长回答会在超时点被掐断且无终止帧（实测 2026-09-27 触发 5 次）。
 	glmUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 
-	// 自定义渠道（R110）：与内建渠道同一口径——`upstream.timeout_seconds` 决定非流式
-	// 总超时，同时把它当作「等响应头」上限的下限（大 prompt 首字节天然慢，不能用
-	// 内建渠道那套紧值）。此处只算一次，下面两处 buildCustomRuntimes 共用。
-	upstreamTimeout := time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-
-	// 开发期调试开关：把各渠道出站对话请求的**上游原始响应**落盘（默认构建已统一带
-	// -tags devdump 编入，见 internal/devdump）。这里只做一次启动期读取与提示；真正的接线在
-	// 下方 wrapDumps（R57 起这是唯一统一改 Transport 的地方，且只在启动时做一次）。
-	devdump.Refresh()
-	if devdump.Enabled() {
-		log.Printf("devdump enabled: 上游原始响应落盘至 %s（devdump 构建；含 token，勿外传）", os.Getenv("WILDWORK_DUMP_DIR"))
-	}
-
-	// 备用上游通道（全局单代理，**不参与常规请求**，仅渠道命中地区拒绝时自取）：
-	// 只存地址，不碰任何渠道 client，故面板保存后无需热更新接线（见 transport.go 头注释）。
-	applyBackupLink(cfg)
-
-	// devdump 落盘接线表：必须覆盖**每一个**注册进 runtimes 的渠道 client。
-	// 旧代理接线表就漏过 trCodeUp（两张表都漏）⇒ 同一个上游客户端变量多实例的渠道
-	// （TraeCode 与 TraeWork 各一份 Client）最容易漏，由 transport_test.go 静态锁死。
-	wrapDumps(map[string][]*http.Client{
-		provider.WorkBuddy.String():   {wbUp.HTTP, wbUp.BillingHTTP, wbUp.StreamHTTP},
-		provider.WorkBuddyAI.String(): {wbaUp.HTTP, wbaUp.StreamHTTP},
-		provider.TraeWork.String():    {trUp.HTTP, trUp.StreamHTTP},
-		provider.TraeCode.String():    {trCodeUp.HTTP, trCodeUp.StreamHTTP},
-		provider.Qoder.String():       {qdUp.HTTP, qdUp.StreamHTTP},
-		provider.QoderCN.String():     {qcnUp.HTTP, qcnUp.StreamHTTP},
-		provider.QoderCOM.String():    {qcmUp.HTTP, qcmUp.StreamHTTP},
-		provider.QwenWork.String():    {qwUp.HTTP, qwUp.StreamHTTP},
-		provider.MonkeyCode.String():  {mcUp.HTTP, mcUp.StreamHTTP},
-		provider.Raccoon.String():     {rcUp.HTTP, rcUp.StreamHTTP},
-		provider.Loomy.String():       {lmUp.HTTP, lmUp.StreamHTTP},
-		provider.Cline.String():       {clUp.HTTP, clUp.StreamHTTP},
-		provider.OfficeAce.String():   {oaUp.HTTP, oaUp.StreamHTTP},
-		provider.Oczen.String():       {ocUp.HTTP, ocUp.StreamHTTP},
-		provider.Kilo.String():        {kiUp.HTTP, kiUp.StreamHTTP},
-		provider.Minimax.String():     {mimUp.HTTP, mimUp.StreamHTTP},
-		provider.LobsterAI.String():   {lobUp.HTTP, lobUp.StreamHTTP},
-		provider.ZCode.String():       {zcdUp.HTTP, zcdUp.StreamHTTP},
-		provider.Gemini.String():      {gemUp.HTTP, gemUp.StreamHTTP},
-		provider.CodeArts.String():    {caUp.HTTP, caUp.StreamHTTP},
-		provider.GLM.String():         {glmUp.HTTP, glmUp.StreamHTTP},
-	})
 	checkinMinutes, err := config.ParseClockTimes(cfg.Schedule.CheckinTimes)
 	if err != nil {
 		fatal("解析签到时间失败：%v", err)
@@ -610,91 +555,31 @@ func main() {
 		// 智谱清言的签到依赖先发一轮最小对话（keepaliveChat），查看器不产生会话 ⇒ 显式关闭。
 		CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg})
 
-	runtimes := map[provider.Kind]*server.Runtime{
-		provider.WorkBuddy: {Kind: provider.WorkBuddy, Pool: wbPool, Upstream: wbUp, StaticModels: server.WorkBuddyStaticModels()},
-		provider.WorkBuddyAI: {Kind: provider.WorkBuddyAI, Pool: wbaPool, Upstream: wbaUp, StaticModels: workbuddyai.StaticModels(),
-			// 国际版网关实测间歇性 502/503/504，账号本身健康，不计入账号错误
-			NoCooldownOnServerError: true},
-		provider.TraeWork: {Kind: provider.TraeWork, Pool: trPool, Upstream: trUp, StaticModels: server.TraeWorkStaticModels()},
-		// TraeCode 与 TraeWork 共享 trPool（同一账号体系，避免 refresh token 轮换冲突），
-		// 仅上游客户端不同（function=solo_agent）。
-		provider.TraeCode:   {Kind: provider.TraeCode, Pool: trPool, Upstream: trCodeUp, StaticModels: server.TraeCodeStaticModels()},
-		provider.Qoder:      {Kind: provider.Qoder, Pool: qdPool, Upstream: qdUp, StaticModels: qoder.StaticModels()},
-		provider.QoderCN:    {Kind: provider.QoderCN, Pool: qcnPool, Upstream: qcnUp, StaticModels: qodercn.StaticModels()},
-		provider.QoderCOM:   {Kind: provider.QoderCOM, Pool: qcmPool, Upstream: qcmUp, StaticModels: qodercom.StaticModels()},
-		provider.QwenWork:   {Kind: provider.QwenWork, Pool: qwPool, Upstream: qwUp, StaticModels: qwenwork.StaticModels()},
-		provider.Raccoon:    {Kind: provider.Raccoon, Pool: rcPool, Upstream: rcUp, StaticModels: raccoon.StaticModels()},
-		provider.Loomy:      {Kind: provider.Loomy, Pool: lmPool, Upstream: lmUp, StaticModels: loomy.StaticModels()},
-		provider.MonkeyCode: {Kind: provider.MonkeyCode, Pool: mcPool, Upstream: mcUp, StaticModels: monkeycode.StaticModels()},
-		provider.GLM:        {Kind: provider.GLM, Pool: glmPool, Upstream: glmUp, StaticModels: glm.StaticModels()},
-		provider.Cline:      {Kind: provider.Cline, Pool: clPool, Upstream: clUp, StaticModels: cline.StaticModels()},
-		provider.OfficeAce:  {Kind: provider.OfficeAce, Pool: oaPool, Upstream: oaUp, StaticModels: officeace.StaticModels()},
-		// 注意：GLM **不**置 SingleAccount。
-		//
-		// 早期误判：以为「凭据轮换后不可人工恢复」就该按单账号处理。但
-		// ① 现在可用 CDP 自动登录随时补账号；② 单账号语义会**跳过所有账号级惩罚**，
-		// 导致账号 A 失效/限流时不会切到账号 B —— 多账号完全失效（实测确认）。
-		// 故按正常多账号渠道处理：错误分类惩罚 + 池内轮换。
-		//
-		// 唯一真实约束是「refresh_token 轮换必须落盘」，已由 glm.RefreshToken 保证。
-		// oczen：整池只有一个匿名虚拟账号且不可重登——任何账号级惩罚（冷却/计数/禁用）
-		// 都等于整条渠道下线。SingleAccount 声明该约束，handler 对所有错误一律原文透传；
-		// NoCooldownOnServerError 保留（语义已被 SingleAccount 涵盖，留着不依赖顺序）。
-		provider.Oczen: {Kind: provider.Oczen, Pool: ocPool, Upstream: ocUp, StaticModels: oczen.StaticModels(),
-			SingleAccount: true, NoCooldownOnServerError: true},
-		// kilo：同为无账号渠道（免密免费池，虚拟账号不可重登），语义与 oczen 一致——
-		// 任何账号级惩罚（冷却/计数/禁用）都等于整条渠道下线，故声明 SingleAccount，
-		// 由 handler 对所有错误一律原文透传。
-		provider.Kilo: {Kind: provider.Kilo, Pool: kiPool, Upstream: kiUp, StaticModels: kilo.StaticModels(),
-			SingleAccount: true, NoCooldownOnServerError: true},
-		// MiniMax：真多账号渠道 ⇒ 不置 SingleAccount（普通错误分类 + 池内轮换都适用）。
-		provider.Minimax: {Kind: provider.Minimax, Pool: mimPool, Upstream: mimUp, StaticModels: minimax.StaticModels()},
-		// LobsterAI：真多账号渠道 ⇒ 不置 SingleAccount（错误分类 + 池内轮换都适用）。
-		provider.LobsterAI: {Kind: provider.LobsterAI, Pool: lobPool, Upstream: lobUp, StaticModels: lobsterai.StaticModels()},
-		// ZCode：真多账号渠道 ⇒ 不置 SingleAccount（错误分类 + 池内轮换都适用）。
-		provider.ZCode: {Kind: provider.ZCode, Pool: zcdPool, Upstream: zcdUp, StaticModels: zcode.StaticModels()},
-		// Gemini：真多账号渠道 ⇒ 不置 SingleAccount。
-		provider.Gemini: {Kind: provider.Gemini, Pool: gemPool, Upstream: gemUp, StaticModels: gemini.StaticModels()},
-		// CodeArts：真多账号渠道 ⇒ 不置 SingleAccount。
-		provider.CodeArts: {Kind: provider.CodeArts, Pool: caPool, Upstream: caUp, StaticModels: codearts.StaticModels()},
-	}
+	// 查看器运行时：只有账号池、查询客户端与静态兜底表，没有转发 Handler。
 	appRuntimes := map[provider.Kind]*app.Runtime{
-		provider.WorkBuddy:   {Kind: provider.WorkBuddy, Pool: wbPool, Upstream: wbUp, Scheduler: wbSch},
-		provider.WorkBuddyAI: {Kind: provider.WorkBuddyAI, Pool: wbaPool, Upstream: wbaUp, Scheduler: wbaSch},
-		provider.TraeWork:    {Kind: provider.TraeWork, Pool: trPool, Upstream: trUp, Scheduler: trSch},
-		provider.TraeCode:    {Kind: provider.TraeCode, Pool: trPool, Upstream: trCodeUp, Alias: true}, // 别名渠道：无独立 Scheduler，账号聚合/签到/刷新均由 TraeWork 负责
-		provider.Qoder:       {Kind: provider.Qoder, Pool: qdPool, Upstream: qdUp, Scheduler: qdSch},
-		provider.QoderCN:     {Kind: provider.QoderCN, Pool: qcnPool, Upstream: qcnUp, Scheduler: qcnSch},
-		provider.QoderCOM:    {Kind: provider.QoderCOM, Pool: qcmPool, Upstream: qcmUp, Scheduler: qcmSch},
-		provider.QwenWork:    {Kind: provider.QwenWork, Pool: qwPool, Upstream: qwUp, Scheduler: qwSch},
-		provider.MonkeyCode:  {Kind: provider.MonkeyCode, Pool: mcPool, Upstream: mcUp, Scheduler: mcSch},
-		provider.Raccoon:     {Kind: provider.Raccoon, Pool: rcPool, Upstream: rcUp, Scheduler: rcSch},
-		provider.Loomy:       {Kind: provider.Loomy, Pool: lmPool, Upstream: lmUp, Scheduler: lmSch},
-		provider.GLM:         {Kind: provider.GLM, Pool: glmPool, Upstream: glmUp, Scheduler: glmSch},
-		provider.Cline:       {Kind: provider.Cline, Pool: clPool, Upstream: clUp, Scheduler: clSch},
-		provider.OfficeAce:   {Kind: provider.OfficeAce, Pool: oaPool, Upstream: oaUp, Scheduler: oaSch},
-		provider.Oczen:       {Kind: provider.Oczen, Pool: ocPool, Upstream: ocUp, Scheduler: ocSch},
-		provider.Kilo:        {Kind: provider.Kilo, Pool: kiPool, Upstream: kiUp, Scheduler: kiSch},
-		provider.Minimax:     {Kind: provider.Minimax, Pool: mimPool, Upstream: mimUp, Scheduler: mimSch},
-		provider.LobsterAI:   {Kind: provider.LobsterAI, Pool: lobPool, Upstream: lobUp, Scheduler: lobSch},
-		provider.ZCode:       {Kind: provider.ZCode, Pool: zcdPool, Upstream: zcdUp, Scheduler: zcdSch},
-		provider.Gemini:      {Kind: provider.Gemini, Pool: gemPool, Upstream: gemUp, Scheduler: gemSch},
-		provider.CodeArts:    {Kind: provider.CodeArts, Pool: caPool, Upstream: caUp, Scheduler: caSch},
-	}
-
-	initCustomServerRts, initCustomAppRts, customNames := buildCustomRuntimes(cfg.CustomChannels, stateDir, upstreamTimeout)
-	for k, rt := range initCustomAppRts {
-		appRuntimes[k] = rt
-	}
-	// 查看器按账号刷新目录/倍率：静态兜底表随 Runtime 一起交给 app，
-	// 上游目录不可用时仍能展示已知模型。
-	for k, art := range appRuntimes {
-		if srt, ok := runtimes[k]; ok && len(art.StaticModels) == 0 {
-			art.StaticModels = srt.StaticModels
-		}
-		if srt, ok := initCustomServerRts[k]; ok && len(art.StaticModels) == 0 {
-			art.StaticModels = srt.StaticModels
-		}
+		provider.WorkBuddy:   {Kind: provider.WorkBuddy, Pool: wbPool, Upstream: wbUp, Scheduler: wbSch, StaticModels: staticmodels.WorkBuddy()},
+		provider.WorkBuddyAI: {Kind: provider.WorkBuddyAI, Pool: wbaPool, Upstream: wbaUp, Scheduler: wbaSch, StaticModels: workbuddyai.StaticModels()},
+		provider.TraeWork:    {Kind: provider.TraeWork, Pool: trPool, Upstream: trUp, Scheduler: trSch, StaticModels: staticmodels.TraeWork()},
+		// TraeCode 与 TraeWork 共享账号池（同一账号体系，避免 refresh token 轮换冲突），
+		// 仅上游客户端不同（function=solo_agent）。
+		provider.TraeCode:   {Kind: provider.TraeCode, Pool: trPool, Upstream: trCodeUp, Alias: true, StaticModels: staticmodels.TraeCode()},
+		provider.Qoder:      {Kind: provider.Qoder, Pool: qdPool, Upstream: qdUp, Scheduler: qdSch, StaticModels: qoder.StaticModels()},
+		provider.QoderCN:    {Kind: provider.QoderCN, Pool: qcnPool, Upstream: qcnUp, Scheduler: qcnSch, StaticModels: qodercn.StaticModels()},
+		provider.QoderCOM:   {Kind: provider.QoderCOM, Pool: qcmPool, Upstream: qcmUp, Scheduler: qcmSch, StaticModels: qodercom.StaticModels()},
+		provider.QwenWork:   {Kind: provider.QwenWork, Pool: qwPool, Upstream: qwUp, Scheduler: qwSch, StaticModels: qwenwork.StaticModels()},
+		provider.MonkeyCode: {Kind: provider.MonkeyCode, Pool: mcPool, Upstream: mcUp, Scheduler: mcSch, StaticModels: monkeycode.StaticModels()},
+		provider.Raccoon:    {Kind: provider.Raccoon, Pool: rcPool, Upstream: rcUp, Scheduler: rcSch, StaticModels: raccoon.StaticModels()},
+		provider.Loomy:      {Kind: provider.Loomy, Pool: lmPool, Upstream: lmUp, Scheduler: lmSch, StaticModels: loomy.StaticModels()},
+		provider.GLM:        {Kind: provider.GLM, Pool: glmPool, Upstream: glmUp, Scheduler: glmSch, StaticModels: glm.StaticModels()},
+		provider.Cline:      {Kind: provider.Cline, Pool: clPool, Upstream: clUp, Scheduler: clSch, StaticModels: cline.StaticModels()},
+		provider.OfficeAce:  {Kind: provider.OfficeAce, Pool: oaPool, Upstream: oaUp, Scheduler: oaSch, StaticModels: officeace.StaticModels()},
+		provider.Oczen:      {Kind: provider.Oczen, Pool: ocPool, Upstream: ocUp, Scheduler: ocSch, StaticModels: oczen.StaticModels()},
+		provider.Kilo:       {Kind: provider.Kilo, Pool: kiPool, Upstream: kiUp, Scheduler: kiSch, StaticModels: kilo.StaticModels()},
+		provider.Minimax:    {Kind: provider.Minimax, Pool: mimPool, Upstream: mimUp, Scheduler: mimSch, StaticModels: minimax.StaticModels()},
+		provider.LobsterAI:  {Kind: provider.LobsterAI, Pool: lobPool, Upstream: lobUp, Scheduler: lobSch, StaticModels: lobsterai.StaticModels()},
+		provider.ZCode:      {Kind: provider.ZCode, Pool: zcdPool, Upstream: zcdUp, Scheduler: zcdSch, StaticModels: zcode.StaticModels()},
+		provider.Gemini:     {Kind: provider.Gemini, Pool: gemPool, Upstream: gemUp, Scheduler: gemSch, StaticModels: gemini.StaticModels()},
+		provider.CodeArts:   {Kind: provider.CodeArts, Pool: caPool, Upstream: caUp, Scheduler: caSch, StaticModels: codearts.StaticModels()},
 	}
 
 	appInst, err := app.New(app.Options{
@@ -727,123 +612,23 @@ func main() {
 	oaSch.SetCheckinObserver(func(r scheduler.CheckinResult) { appInst.NotifyCheckin("officeace", r) })
 	oaSch.SetRefreshObserver(func(uid string, ok bool, msg string) { appInst.NotifyRefresh("officeace", uid, ok, msg) })
 
-	// HTTP handler：OpenAI 端点 + Web UI + 管理 API
+	// 查看器 HTTP 入口：静态面板 + 管理 API。不构造、也不挂载任何转发 Handler。
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
 		fatal("embed web: %v", err)
 	}
-	inner := server.NewHandler(server.Config{
-		Runtimes:     runtimes,
-		APIKey:       cfg.APIKey,
-		Ledger:       appInst.Ledger(),
-		Stats:        appInst.Stats(), // 转发路径插桩 AddUsage/AddRequestRow（运行统计）
-		HardCooldown: cfg.HardCreditDur,
-		// 硬冷却截到每日发奖窗口（方案 B）：qwenwork 每日 00:00 UTC+8 发额度，
-		// 账本实测 00:01~00:20 到账。固定 12h 会把 19:07 的 402 锁到次日 07:07，
-		// 白锁 7 小时；按窗口截断后 00:30 即解冻，额度一到账就能用。
-		HardCooldownFor:  cfg.HardCooldownFor,
-		SoftCooldown:     cfg.SoftRateDur,
-		ErrThreshold:     cfg.Cooldown.ErrThresh,
-		ErrCooldown:      cfg.ErrCooldownDur,
-		ReasoningEffort:  cfg.Compat.ReasoningEffort,
-		ModelFallbacks:   cfg.ModelFallback,                        // 启动时载入降级链（此前仅面板保存后热更新，重启即丢）
-		ReasoningEfforts: cfg.ReasoningEfforts,                     // 启动时载入思考强度映射（同上）
-		MaxRequestBody:   int64(cfg.Server.MaxRequestBodyMB) << 20, // 0 = server 默认 128MiB
-		WebUI:            sub,
-		AttachAPI:        appInst.HandleAPI,
-	})
-	inner.SetCustomRuntimes(initCustomServerRts)
-
-	// 两层结构：外层兼容层只接管三个新端点，其余（含 /v1/chat/completions、Web UI、
-	// 管理 API）原样落到内层 handler，旧客户端的调用栈完全不变。
-	// 渠道清单注入 Router，用于校验模型名前缀并给出可读报错。
-	var builtinChannels []string
-	for k := range runtimes {
-		builtinChannels = append(builtinChannels, k.String())
-	}
-
-	// chMu/channels 持有「当前生效的完整渠道清单」（内建 + 启用中的自定义），供
-	// compat syncer 与 custom syncer 共用（channelList 类型，便于单测锁住）。
-	// 为什么必须是可变共享态而不能各自用启动快照：compat syncer 与 custom syncer 分属
-	// 不同保存路径，若 compat syncer 闭包捕获启动快照，则「先加自定义渠道、
-	// 后单改模型映射并保存」会把清单重置回启动态 ⇒ 新渠道被丢掉，/v1/responses 与
-	// /v1/messages 报 unknown channel（R61 同族的「只实现一条通道」缺陷）。
-	chList := &channelList{builtin: builtinChannels, custom: customNames}
-	currentChannels := chList.snapshot
-
-	compat := gateway.New(gateway.Config{
-		Inner:  inner,
-		APIKey: cfg.APIKey,
-		Router: gateway.Router{
-			Default:  cfg.Compat.DefaultChannel,
-			Map:      cfg.Compat.ModelMap,
-			Channels: gateway.SortChannels(currentChannels()),
-		},
-		MaxTokensCap: cfg.Compat.MaxTokensCap,
-		// Responses 思考摘要下发策略（auto / on / off）
-		ResponsesReasoningSummary: cfg.Compat.ResponsesReasoningSummary,
-	})
-	// 面板保存 compat 时热更新兼容层路由表（不然新映射要重启才生效）
-	// 面板保存 compat 时热更新兼容层路由表（不然新映射要重启才生效）
-	appInst.SetCompatSyncer(func(defaultChannel string, maxTokensCap int, modelMap map[string]string, reasoningSummary string) {
-		compat.SetCompat(defaultChannel, maxTokensCap, modelMap, currentChannels(), reasoningSummary)
-	})
-	// 面板保存模型降级链时热更新内层 handler（不然新链要重启才生效）
-	appInst.SetModelFallbackSyncer(func(rules []config.ModelFallbackRule) {
-		inner.SetModelFallbacks(rules)
-	})
-	// 面板保存思考强度映射时热更新内层 handler（不然新映射要重启才生效）
-	appInst.SetReasoningEffortsSyncer(func(efforts map[string]string) {
-		inner.SetReasoningEfforts(efforts)
-	})
-	// 面板保存自定义渠道时热更新内层 handler、app 运行时与兼容层路由表（R66）
-	appInst.SetCustomChannelsSyncer(func(customChannels []custom.ChannelConfig) {
-		newServerRts, newAppRts, newNames := buildCustomRuntimes(customChannels, stateDir, upstreamTimeout)
-		inner.SetCustomRuntimes(newServerRts)
-		appInst.UpdateCustomRuntimes(newAppRts)
-
-		// 同步更新共享渠道清单（下一步 compat.SetCompat 用同一份，避免两条通道打架）
-		chList.setCustom(newNames)
-
-		compat.SetCompat(cfg.Compat.DefaultChannel, cfg.Compat.MaxTokensCap, cfg.Compat.ModelMap, currentChannels(), cfg.Compat.ResponsesReasoningSummary)
-		inner.InvalidateModels()
-	})
-	// 备用上游通道无需热更新接线：面板保存走 app.SetBackupProxy → backuplink.Set（只换指针），
-	// 渠道在命中地区拒绝时按需自取（R57），因此不存在旧的「两张接线表不一致」失效形态。
+	mux := http.NewServeMux()
+	// /v1/* 与旧网关状态一律 404，且必须注册在 "/" 之前（ServeMux 取最长前缀，
+	// 否则会被静态站点兜底成 HTML 200）。
+	mux.HandleFunc("/v1/", notFound)
+	mux.HandleFunc("/status", notFound)
+	mux.Handle("/", http.FileServer(http.FS(sub)))
+	appInst.HandleAPI(mux)
 	// 面板保存 oczen key 后热更新渠道凭证；启动时也应用一次配置中的初始 key
 	appInst.SetOczenSyncer(ocUp.SetAPIKey)
 	ocUp.SetAPIKey(cfg.OczenAPIKey)
-	compat.SetAPIKeySource(inner.CurrentAPIKey) // 面板改 API-Key 后，兼容层立即跟随
-	compat.SetSystemOneHandler(func(w http.ResponseWriter, r *http.Request, state string, questions map[string]any) (int, []byte, error) {
-		return ocUp.SystemOne(state, questions)
-	})
-	mux := http.NewServeMux()
-	// 查看器不提供任何会话转发入口：/v1/* 与旧网关状态一律 404。
-	// 必须注册在 "/" 之前——ServeMux 取最长前缀匹配，否则会被静态站点兜底成 HTML 200。
-	mux.HandleFunc("/v1/", notFound)
-	mux.HandleFunc("/status", notFound)
-	mux.Handle("/", inner)
-	log.Printf("wild-view revision=%s 数据目录=%s", buildRevision(), wd)
-	if compat != nil {
-		log.Printf("三接口兼容层已启用：default_channel=%q max_tokens_cap=%d reasoning_effort=%q responses_reasoning_summary=%q model_map=%d 条",
-			cfg.Compat.DefaultChannel, cfg.Compat.MaxTokensCap, cfg.Compat.ReasoningEffort,
-			cfg.Compat.ResponsesReasoningSummary, len(cfg.Compat.ModelMap))
-	}
-	// DeepSeek 思考改写开关（渠道层包级开关；面板保存 compat 时会热更新）
-	upstream.SetDeepseekThinking(cfg.DeepseekThinkingEnabled())
-	log.Printf("思考控制：deepseek_thinking=%v（thinking 开关字段 + reasoning_content 回填）",
-		cfg.DeepseekThinkingEnabled())
-	// 档位静态兜底表开关（档位层包级开关；面板保存 compat 时会热更新）
-	reasoning.SetStaticEffortFallback(cfg.StaticEffortFallbackEnabled())
-	log.Printf("思考控制：static_effort_fallback=%v（上游目录未下发档位能力时是否用内置表补齐）",
-		cfg.StaticEffortFallbackEnabled())
-	// 逐模型上下文档位（请求体构造用包级开关；面板改动时会热更新）
-	appInst.ApplyContextWindows()
-	if n := len(cfg.Compat.ContextWindows); n > 0 {
-		log.Printf("上下文窗口：%d 个模型指定了档位（按模型可选档位就近取不超过它的最高档）", n)
-	}
-	appInst.SetHandler(inner)
 	appInst.SetRootHandler(mux)
+	log.Printf("wild-view revision=%s 数据目录=%s", buildRevision(), wd)
 
 	if err := appInst.StartServer(); err != nil {
 		// 监听失败必须终止：只记日志继续跑会让调度器与托盘照常起来，
@@ -854,8 +639,8 @@ func main() {
 			cfg.Listen.Addr(), err)
 	}
 	// 地址必须落日志：启动弹窗可能被忽略或关掉，日志里始终留一份。
-	log.Printf("已启动：OpenAI 兼容 API http://%s:%d/v1（Web UI http://%s:%d/）",
-		displayHost(cfg), cfg.Listen.Port, displayHost(cfg), cfg.Listen.Port)
+	log.Printf("已启动：账号额度与模型倍率查看器（Web UI http://%s:%d/）",
+		displayHost(cfg), cfg.Listen.Port)
 
 	// 调度器后台运行
 	sctx, stop := context.WithCancel(context.Background())
@@ -1053,6 +838,35 @@ func buildRevision() string {
 	return "unknown"
 }
 
+// migrateStateFiles 旧版 state.json 兼容：旧版 WorkBuddy 状态文件名为 state.json，
+// 新版改为 state-workbuddy.json。若旧文件存在且新文件不存在，则重命名。
+func migrateStateFiles(oldStateFile, stateDir string) {
+	newFp := filepath.Join(stateDir, "state-workbuddy.json")
+	if _, err := os.Stat(newFp); err == nil {
+		return // 新文件已存在
+	}
+	if _, err := os.Stat(oldStateFile); err != nil {
+		return // 旧文件不存在
+	}
+	raw, err := os.ReadFile(oldStateFile)
+	if err != nil {
+		return
+	}
+	var sf struct {
+		Accounts map[string]json.RawMessage `json:"accounts"`
+	}
+	if err := json.Unmarshal(raw, &sf); err != nil {
+		log.Printf("state.json 解析失败，跳过迁移: %v", err)
+		return
+	}
+	if err := os.WriteFile(newFp, raw, 0o600); err != nil {
+		log.Printf("迁移 state.json 失败: %v", err)
+		return
+	}
+	_ = os.Rename(oldStateFile, oldStateFile+".old")
+	log.Printf("已迁移 state.json → state-workbuddy.json")
+}
+
 // displayHost 展示用途的主机名。
 // 通配监听（0.0.0.0/::/空）是用户主动配置的意图，如实显示 0.0.0.0；
 // localhost 归一为 127.0.0.1。不做任何「善意」替换——面板顶栏同理（见 app.js renderTopbar）。
@@ -1113,100 +927,3 @@ func fatal(format string, args ...any) {
 // migrateStateFiles 旧版 state.json 兼容：旧版 WorkBuddy 状态文件名为 state.json，
 // 新版改为 state-workbuddy.json。若旧文件存在且新文件不存在，则重命名。
 // TraeWork 状态文件始终是 state-traework.json，无需迁移。
-// channelList 持有「当前生效的完整渠道清单」（内建 + 启用中的自定义），供 compat 与
-// custom 两条保存通道共用。零值可用：snapshot 返回空表。
-// 单测锁定「setCustom 后 snapshot 含新渠道、且不与内建重复」——这正是原始实现的缺陷：
-// compat syncer 捕获启动快照，导致后加的自定义渠道在某条保存路径下被丢弃。
-type channelList struct {
-	mu      sync.Mutex
-	builtin []string
-	custom  []string
-}
-
-// setCustom 替换自定义渠道清单（内建部分不变）。
-func (c *channelList) setCustom(custom []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.custom = append([]string(nil), custom...)
-}
-
-// snapshot 返回内建 + 自定义的完整渠道清单（拷贝，调用方可安全持有）。
-func (c *channelList) snapshot() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]string, 0, len(c.builtin)+len(c.custom))
-	out = append(out, c.builtin...)
-	out = append(out, c.custom...)
-	return out
-}
-
-func migrateStateFiles(oldStateFile, stateDir string) {
-	newFp := filepath.Join(stateDir, "state-workbuddy.json")
-	if _, err := os.Stat(newFp); err == nil {
-		return // 新文件已存在
-	}
-	if _, err := os.Stat(oldStateFile); err != nil {
-		return // 旧文件不存在
-	}
-	// 读旧文件确认是有效的 state JSON
-	raw, err := os.ReadFile(oldStateFile)
-	if err != nil {
-		return
-	}
-	var sf struct {
-		Accounts map[string]json.RawMessage `json:"accounts"`
-	}
-	if err := json.Unmarshal(raw, &sf); err != nil {
-		log.Printf("state.json 解析失败，跳过迁移: %v", err)
-		return
-	}
-	if err := os.WriteFile(newFp, raw, 0o600); err != nil {
-		log.Printf("迁移 state.json 失败: %v", err)
-		return
-	}
-	_ = os.Rename(oldStateFile, oldStateFile+".old")
-	log.Printf("已迁移 state.json → state-workbuddy.json")
-}
-
-// buildCustomRuntimes 将配置中的自定义渠道列表装配为 server 与 app 运行时（R66）。
-//
-// upstreamTimeout 是 `config.upstream.timeout_seconds`（0 = 渠道默认值）。内建渠道在
-// main 里逐个注入 `xxxUp.HTTP.Timeout`，自定义渠道原先漏了这条接线（R110）。
-func buildCustomRuntimes(channels []custom.ChannelConfig, stateDir string, upstreamTimeout time.Duration) (map[provider.Kind]*server.Runtime, map[provider.Kind]*app.Runtime, []string) {
-	sRuntimes := map[provider.Kind]*server.Runtime{}
-	aRuntimes := map[provider.Kind]*app.Runtime{}
-	var names []string
-
-	for _, cc := range channels {
-		k := provider.Kind(cc.Name)
-		client := custom.NewWithTimeout(cc, upstreamTimeout)
-		p := pool.New(filepath.Join(stateDir, "state-custom-"+cc.Name+".json"))
-		au := &auth.Auth{
-			Kind:      cc.Name,
-			UID:       "custom-" + cc.Name,
-			Nickname:  cc.Name + " (自定义)",
-			ExpiresAt: 4102444800,
-		}
-		p.Add(au)
-		p.SetDisabled(au.UID, false)
-		p.ClearPenalty(au.UID)
-
-		sRuntimes[k] = &server.Runtime{
-			Kind:                    k,
-			Pool:                    p,
-			Upstream:                client,
-			StaticModels:            client.StaticModels(),
-			SingleAccount:           true,
-			NoCooldownOnServerError: true,
-		}
-		aRuntimes[k] = &app.Runtime{
-			Kind:     k,
-			Pool:     p,
-			Upstream: client,
-			Custom:   true,
-		}
-		names = append(names, cc.Name)
-		stats.RegisterChannelKind(cc.Name)
-	}
-	return sRuntimes, aRuntimes, names
-}
