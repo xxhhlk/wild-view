@@ -19,8 +19,8 @@ import (
 	"net/http"
 	"strings"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // catalogEntry 是归一化后的模型条目；动态目录与静态兜底共用同一形状

@@ -1,7 +1,7 @@
 # 编译产物
 dist/
-cmd/wild-work/rsrc_windows_amd64.syso
-cmd/wild-work/icon.ico
+cmd/wild-view/rsrc_windows_amd64.syso
+cmd/wild-view/icon.ico
 /prepbody.exe
 
 # Go 构建缓存与临时目录（本机构建用，不入版本控制）

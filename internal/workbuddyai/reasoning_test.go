@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestFetchModelsPassesThroughReasoning 假上游目录带 reasoning 对象 →

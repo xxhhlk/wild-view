@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"wild-work/internal/gemini"
+	"wild-view/internal/gemini"
 )
 
 // TestMain 给测试进程注入**假**的 OAuth 客户端凭据。

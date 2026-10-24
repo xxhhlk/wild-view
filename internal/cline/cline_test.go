@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/upstream"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/upstream"
 )
 
 // ---------------------------------------------------------------------------

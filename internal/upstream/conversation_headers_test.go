@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 const cnConvBody = `{"model":"deepseek-v4.1-flash","messages":[{"role":"system","content":"s"},{"role":"user","content":"第一问"}]}`

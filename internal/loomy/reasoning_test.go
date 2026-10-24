@@ -10,8 +10,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // TestFetchModelsPassesThroughReasoning 上游 reasoning_efforts/default_reasoning_effort

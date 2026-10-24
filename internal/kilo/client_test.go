@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // newFake 起一个假上游并返回客户端（Base 指向它）。

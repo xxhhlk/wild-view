@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // testAuth 构造最小可用凭据（无需真实 token）。

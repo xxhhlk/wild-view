@@ -26,7 +26,7 @@ import (
 	"regexp"
 	"strings"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 var (

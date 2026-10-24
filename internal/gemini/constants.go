@@ -14,7 +14,7 @@ package gemini
 import (
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // Kind 渠道标识，直接复用 provider.Gemini。

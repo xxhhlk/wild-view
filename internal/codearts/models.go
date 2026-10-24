@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // modelEntry 归一化后的模型条目（静态兜底与远端目录共用同一形状）。

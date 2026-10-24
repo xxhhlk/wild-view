@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // Kind 渠道标识，同时是模型名前缀（glm/xxx）。

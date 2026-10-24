@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // ---------------------------------------------------------------------------

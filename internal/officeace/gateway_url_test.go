@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // 网关 base 的字段语义锁定（issue #152）：

@@ -11,7 +11,7 @@ import (
 // TestFrontendAPIPathsHaveRoutes 前端 app.js 里调用的每个 `/api/…` 路径，后端都必须
 // 有对应路由 —— 否则面板上那个按钮/开关点下去必 404，而且**编译与静态检查都发现不了**。
 //
-// 为什么要这条守门（本仓特有）：`cmd/wild-work/web` 三件套是本仓自维护的（B 决策），
+// 为什么要这条守门（本仓特有）：`cmd/wild-view/web` 三件套是本仓自维护的（B 决策），
 // 上游改后端端点时不会连带改我们的前端，历史已踩两次：
 //   - R57 把「每渠道上游代理」换成单一「备用上游通道」（`POST /api/config/proxy`）后，
 //     面板仍调已删除的 `POST /api/config/proxies` ⇒ 「渠道上游代理」保存永远失败，
@@ -24,7 +24,7 @@ import (
 // （实测踩过：改成 `pattern != "/api/"` 后正向用例仍红，因为业务路由根本不在外层）。
 // 扫源码则不受注册层次影响，也没有执行 handler 的副作用。
 func TestFrontendAPIPathsHaveRoutes(t *testing.T) {
-	src, err := os.ReadFile("../../cmd/wild-work/web/app.js")
+	src, err := os.ReadFile("../../cmd/wild-view/web/app.js")
 	if err != nil {
 		t.Fatalf("读 app.js 失败：%v", err)
 	}

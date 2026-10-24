@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/workbuddyai"
+	"wild-view/internal/workbuddyai"
 )
 
 // ErrPending 登录尚未完成（浏览器还没登录完）。

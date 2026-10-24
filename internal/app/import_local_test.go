@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/monkeycode"
+	"wild-view/internal/monkeycode"
 )
 
 // writeCookieFile 在临时配置目录里落一份客户端 cookie 文件，并把该目录设为

@@ -17,9 +17,9 @@ import (
 	"strings"
 	"testing"
 
-	logingemini "wild-work/internal/login_gemini"
-	loginqwenwork "wild-work/internal/login_qwenwork"
-	"wild-work/internal/provider"
+	logingemini "wild-view/internal/login_gemini"
+	loginqwenwork "wild-view/internal/login_qwenwork"
+	"wild-view/internal/provider"
 )
 
 // TestManualCallbackKindWhitelist 需要人工通道的渠道必须为 true，其余必须为 false。

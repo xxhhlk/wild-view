@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/loopguard"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/loopguard"
+	"wild-view/internal/provider"
 )
 
 // TestClassify 覆盖阶段 C 实测到的全部错误形态（LiteLLM 信封）。

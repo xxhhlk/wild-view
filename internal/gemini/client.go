@@ -29,9 +29,9 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/upstream"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/upstream"
 )
 
 // Client 上游 HTTP 客户端。导出 Base / Daily / Sandbox / TokenURL 便于测试注入假上游。

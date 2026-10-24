@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 func liveKey(t *testing.T) string {
@@ -46,7 +46,7 @@ func liveProxy() string {
 }
 
 // liveClient 造一个带代理的客户端。
-// 代理注入等价于生产路径的 SetTransportProxy（那个助手在 cmd/wild-work 包内，渠道包不可引）。
+// 代理注入等价于生产路径的 SetTransportProxy（那个助手在 cmd/wild-view 包内，渠道包不可引）。
 func liveClient() *Client {
 	c := New()
 	tr, _ := c.HTTP.Transport.(*http.Transport)

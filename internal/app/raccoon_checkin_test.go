@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 本测试锁定 R65：小浣熊签到接线（setting_info 触发每日积分惰性落账）。
@@ -15,9 +15,9 @@ import (
 // （见 internal/raccoon/checkin.go 的实测记录）。这次改动横跨四处：
 //
 //	① internal/raccoon/checkin.go   渠道实现（DailyCheckinReport）
-//	② cmd/wild-work/main.go         调度器给签到时间 + 观察器
+//	② cmd/wild-view/main.go         调度器给签到时间 + 观察器
 //	③ internal/app/app.go           noExplicitCheckin 移除 Raccoon（开放手动按钮）
-//	④ cmd/wild-work/web/app.js      NO_EXPLICIT_CHECKIN 移除 "raccoon"
+//	④ cmd/wild-view/web/app.js      NO_EXPLICIT_CHECKIN 移除 "raccoon"
 //
 // 漏任意一处都**不报错**——只表现为「按钮是灰的」或「定时不跑」（R34/R41 同族），
 // 故用静态断言锁死。
@@ -84,7 +84,7 @@ func TestRaccoonCheckinWiring(t *testing.T) {
 	}
 
 	// ④ 调度器：rcSch 必须有签到时间（不再是显式空切片）且观察器已接线。
-	mainSrc, err := os.ReadFile("../../cmd/wild-work/main.go")
+	mainSrc, err := os.ReadFile("../../cmd/wild-view/main.go")
 	if err != nil {
 		t.Fatalf("读 main.go 失败: %v", err)
 	}

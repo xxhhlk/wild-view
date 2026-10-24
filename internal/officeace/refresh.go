@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // refreshToken 用 refresh_token 经 DPoP 向华为 STS 换新的临时凭据，并**落盘**。

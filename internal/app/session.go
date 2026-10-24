@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/config"
+	"wild-view/internal/config"
 )
 
 const (

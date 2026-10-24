@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestClassifyPromptTooLong11115 守门：上下文超限（11115）是请求级错误——

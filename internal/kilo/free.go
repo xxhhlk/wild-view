@@ -8,7 +8,7 @@ package kilo
 import (
 	"strings"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // listingRow 上游 GET /models 的单行（OpenRouter 风格清单）。

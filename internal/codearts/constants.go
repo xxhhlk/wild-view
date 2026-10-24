@@ -11,7 +11,7 @@ package codearts
 import (
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // Kind 渠道标识，直接复用 provider.CodeArts（模型前缀路由 / BuiltinKinds / stats 白名单的

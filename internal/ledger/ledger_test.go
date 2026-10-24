@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestDiffCreditsEarningsAndSpend 差分记账：发放→入项、消耗→spend、消失→过期。

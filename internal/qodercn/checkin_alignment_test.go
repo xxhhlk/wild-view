@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // withCNCheckinServer 起假上游并把 checkinHost 指过去（与 qodercn_test.go 同款收尾）。

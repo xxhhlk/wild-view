@@ -4,7 +4,7 @@
 // 不依赖任何转发实现。
 package staticmodels
 
-import "wild-work/internal/provider"
+import "wild-view/internal/provider"
 
 // WorkBuddy 静态兜底表无上游能力数据，故不声明能力。
 var workbuddy = []provider.ModelInfo{

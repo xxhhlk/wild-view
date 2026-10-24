@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 上游（华为网关）在部分限流/故障时用 **HTTP 200 + 流内 error 帧** 返回

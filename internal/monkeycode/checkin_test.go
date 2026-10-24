@@ -29,8 +29,8 @@ import (
 	"sync"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // ---------------------------------------------------------------------------

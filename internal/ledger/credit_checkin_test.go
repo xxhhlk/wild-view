@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // newTestLedger 建临时 Ledger（测试结束关闭句柄，避免 Windows 文件锁卡 TempDir 清理）。

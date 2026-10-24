@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestStartLoginForPerChannelBranch 断言「每个渠道的登录发起能力恰好一个、且真实可用」。

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // 锁定 V4/V11 签名的结构（不联网）：授权头应含算法标识、Credential、SignedHeaders、Signature。

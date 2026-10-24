@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/raccoon"
+	"wild-view/internal/raccoon"
 )
 
 // fakeJWT 造一个仅含 payload 的假 JWT（本包只解 payload，不验签）。

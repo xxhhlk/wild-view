@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/reasoning"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/reasoning"
 )
 
 func TestNormalizeModelName(t *testing.T) {

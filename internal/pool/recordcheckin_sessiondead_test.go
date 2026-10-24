@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // TestRecordCheckinFailureMarksSessionDead 回归测试（issue #157）：

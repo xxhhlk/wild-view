@@ -1,6 +1,6 @@
 package officeace
 
-import "wild-work/internal/provider"
+import "wild-view/internal/provider"
 
 // 已知可用模型（作为上游目录拉取失败时的兜底；正常以 /models 动态目录为准）。
 // 来源：officeace2api 实测「能用的 11 个」+ 其目录里其余条目；上游 /models 无能力声明，

@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/traework"
+	"wild-view/internal/traework"
 )
 
 // extractQuery 从授权 URL 里取 query 参数。

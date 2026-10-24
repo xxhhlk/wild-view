@@ -23,8 +23,8 @@ import (
 	"strconv"
 	"strings"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // errNoAccount 本地哨兵：没有可用凭据（目录门控），不是上游故障。

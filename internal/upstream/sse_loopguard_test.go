@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/loopguard"
+	"wild-view/internal/loopguard"
 )
 
 // reasoningLoopFixture 构造一个「思考链死循环」的 SSE 流：

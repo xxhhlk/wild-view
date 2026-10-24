@@ -45,9 +45,9 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/upstream"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/upstream"
 )
 
 // ErrClaimUnsupported 本渠道**不支持自动领取额度**。

@@ -3,8 +3,8 @@ package app
 import (
 	"testing"
 
-	"wild-work/internal/config"
-	"wild-work/internal/provider"
+	"wild-view/internal/config"
+	"wild-view/internal/provider"
 )
 
 // TestCreditsUnitTokenChannels 守门「Token 计数与积分分开」这套口径（2026-10-17 用户要求）：

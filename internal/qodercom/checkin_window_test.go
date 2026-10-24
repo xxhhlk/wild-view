@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // windowsAroundNow 返回与「现在」相关的三个时刻（Unix 秒），供夹具构造。

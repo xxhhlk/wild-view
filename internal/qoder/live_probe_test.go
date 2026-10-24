@@ -74,8 +74,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/reasoning"
+	"wild-view/internal/auth"
+	"wild-view/internal/reasoning"
 )
 
 // liveAuth 从 WILDWORK_AUTHDIR（默认 ./auths）取第一个 Qoder 账号。

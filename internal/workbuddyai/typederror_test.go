@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // R79（国际版同款）：目录/费率接口遇 HTTP ≥400 必须返回**类型化** *provider.Error，

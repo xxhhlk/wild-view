@@ -1,5 +1,5 @@
 // Package app 业务编排层：HTTP 管理 API + 托盘动作 + 登录编排 + 日志。
-// 由 daemon 入口（cmd/wild-work）装配，替代旧版 wails 绑定层。
+// 由 daemon 入口（cmd/wild-view）装配，替代旧版 wails 绑定层。
 package app
 
 import (
@@ -18,43 +18,43 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/cline"
-	"wild-work/internal/config"
-	"wild-work/internal/ledger"
-	"wild-work/internal/login"
-	logincodearts "wild-work/internal/login_codearts"
-	logingemini "wild-work/internal/login_gemini"
-	"wild-work/internal/login_glm"
-	loginlobsterai "wild-work/internal/login_lobsterai"
-	loginloomy "wild-work/internal/login_loomy"
-	loginminimax "wild-work/internal/login_minimax"
-	loginqoder "wild-work/internal/login_qoder"
-	loginqodercn "wild-work/internal/login_qodercn"
-	loginqodercom "wild-work/internal/login_qodercom"
-	loginqwenwork "wild-work/internal/login_qwenwork"
-	loginraccoon "wild-work/internal/login_raccoon"
-	logintrae "wild-work/internal/login_trae"
-	"wild-work/internal/login_wbai"
-	loginzcode "wild-work/internal/login_zcode"
-	"wild-work/internal/oczen"
-	"wild-work/internal/officeace"
-	"wild-work/internal/platform"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
-	"wild-work/internal/qoder"
-	"wild-work/internal/qodercn"
-	"wild-work/internal/qodercom"
-	"wild-work/internal/qwenwork"
-	"wild-work/internal/raccoon"
-	"wild-work/internal/reasoning"
-	"wild-work/internal/scheduler"
-	statsEngine "wild-work/internal/stats"
-	"wild-work/internal/systray"
+	"wild-view/internal/auth"
+	"wild-view/internal/cline"
+	"wild-view/internal/config"
+	"wild-view/internal/ledger"
+	"wild-view/internal/login"
+	logincodearts "wild-view/internal/login_codearts"
+	logingemini "wild-view/internal/login_gemini"
+	"wild-view/internal/login_glm"
+	loginlobsterai "wild-view/internal/login_lobsterai"
+	loginloomy "wild-view/internal/login_loomy"
+	loginminimax "wild-view/internal/login_minimax"
+	loginqoder "wild-view/internal/login_qoder"
+	loginqodercn "wild-view/internal/login_qodercn"
+	loginqodercom "wild-view/internal/login_qodercom"
+	loginqwenwork "wild-view/internal/login_qwenwork"
+	loginraccoon "wild-view/internal/login_raccoon"
+	logintrae "wild-view/internal/login_trae"
+	"wild-view/internal/login_wbai"
+	loginzcode "wild-view/internal/login_zcode"
+	"wild-view/internal/oczen"
+	"wild-view/internal/officeace"
+	"wild-view/internal/platform"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
+	"wild-view/internal/qoder"
+	"wild-view/internal/qodercn"
+	"wild-view/internal/qodercom"
+	"wild-view/internal/qwenwork"
+	"wild-view/internal/raccoon"
+	"wild-view/internal/reasoning"
+	"wild-view/internal/scheduler"
+	statsEngine "wild-view/internal/stats"
+	"wild-view/internal/systray"
 )
 
 // Version 版本号。
-const Version = "2.9.6"
+const Version = "0.1.0"
 
 const (
 	loginTimeout   = 5 * time.Minute
@@ -299,7 +299,7 @@ func (a *App) firstRuntime() *Runtime {
 
 // uniqueRuntimes 返回「账号维度」去重后的运行时列表（按渠道固定序，见 channelRank）。
 //
-// TraeWork 与 TraeCode 共用同一个账号池（同一上游账号体系，见 cmd/wild-work 装配，
+// TraeWork 与 TraeCode 共用同一个账号池（同一上游账号体系，见 cmd/wild-view 装配，
 // 目的是避免 refresh_token 轮换冲突）。因此凡是按账号统计/展示的地方都必须按池去重，
 // 否则同一账号会被列两次（面板上出现两个 traework，账号总数虚高，刷新全部时同账号被刷两遍）。
 //
@@ -2531,7 +2531,7 @@ func feeChannelOrderWithDynamic(modelsByKind map[provider.Kind][]provider.ModelI
 // customRename 一条渠道改名记录（R122）：面板编辑渠道标识时，随整表一起声明
 // 「New 这个新标识是从 Old 这个旧标识改过来的」。
 //
-// 为什么必须显式传：渠道标识**就是** provider.Kind（cmd/wild-work/main.go 里
+// 为什么必须显式传：渠道标识**就是** provider.Kind（cmd/wild-view/main.go 里
 // `k := provider.Kind(cc.Name)`、state 文件与虚拟账号 UID 全部拼名字），而只对比新旧两张表
 // 无法区分「改名」与「删一个 + 新增一个」——不声明就会踩到：脱敏回来的密钥按新名找不回、
 // 真密钥被空串覆盖落盘。

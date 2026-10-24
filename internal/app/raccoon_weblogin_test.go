@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 本测试锁定 R44：小浣熊登录必须走「网页版 CDP 捕获」，

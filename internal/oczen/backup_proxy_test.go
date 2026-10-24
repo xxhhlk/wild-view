@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"wild-work/internal/backuplink"
+	"wild-view/internal/backuplink"
 )
 
 // regionBody 上游实测形态：403 + error.type=RegionError。

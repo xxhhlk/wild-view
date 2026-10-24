@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/upstream"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/upstream"
 )
 
 // Client 是 OfficeAce（华为云果办模型网关）渠道客户端，实现 provider.Upstream。

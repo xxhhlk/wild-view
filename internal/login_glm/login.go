@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/glm"
+	"wild-view/internal/glm"
 )
 
 // LoginURL 用户需要在浏览器里打开的地址。

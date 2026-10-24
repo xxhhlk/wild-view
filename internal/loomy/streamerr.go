@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 上游把**鉴权失效塞在 HTTP 200 的纯 JSON 体里**（`{"code":"100002","desc":"登录已失效，

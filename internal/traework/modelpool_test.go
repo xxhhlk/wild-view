@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // TestFunctionForModelBuiltInFallback 内置兜底：目录尚未拉取时，已知 solo_agent

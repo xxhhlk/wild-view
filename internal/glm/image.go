@@ -20,8 +20,8 @@ import (
 	"net/http"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // imageGenTimeout 生图流的整体兜底超时（实测 12.5~14.7s；流式 client 无 Client.Timeout，

@@ -27,7 +27,7 @@ import (
 	"unicode"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // Credential 是 STS 换来的临时凭据（协议 §2.7「STS token 响应」）。

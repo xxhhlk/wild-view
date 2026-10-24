@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/ledger"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/ledger"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // dispatchUpstream 只覆盖签到与余额两条路径的假上游（其余方法不会被签到路径调用）。

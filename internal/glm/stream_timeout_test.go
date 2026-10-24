@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // 本文件锁定一个**真实 bug**（2026-09-27 从生产日志发现）：

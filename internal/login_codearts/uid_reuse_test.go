@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // TestSaveAuthReusesExistingUID 守门「方案 B」（2026-10-17 用户实测报告落地）：

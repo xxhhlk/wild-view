@@ -10,10 +10,10 @@ package scheduler
 import (
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/ledger"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/ledger"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // amountReporter 只实现 CheckinReporter，回执带 Amount（对齐 upstream.DailyCheckinReport）。

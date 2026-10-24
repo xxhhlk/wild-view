@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/cdp"
+	"wild-view/internal/cdp"
 )
 
 // CookieName 清言凭据所在的 Cookie 名。

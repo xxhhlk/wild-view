@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestCatalogAccountIsolation 守门「按账号缓存」的核心语义：

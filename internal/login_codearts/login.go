@@ -37,9 +37,9 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/codearts"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/codearts"
+	"wild-view/internal/provider"
 )
 
 // flowTTL 一次登录流程的最长等待（回调 server 与被轮询状态的共同上限）。

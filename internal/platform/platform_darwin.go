@@ -80,7 +80,7 @@ func OpenURL(url string) error {
 // 开机自启（LaunchAgent plist）
 // ---------------------------------------------------------------------------
 
-const launchAgentName = "com.rockswang.wild-work"
+const launchAgentName = "com.xxhhlk.wild-view"
 
 func launchAgentPath() string {
 	return filepath.Join(os.Getenv("HOME"), "Library", "LaunchAgents", launchAgentName+".plist")
@@ -111,17 +111,19 @@ func SetAutostart(on bool) error {
 	return exec.Command("launchctl", "load", path).Run()
 }
 
-// workDirFor 推导数据/工作目录，规则与 cmd/wild-work 的 workDir() 保持一致：
+// workDirFor 推导数据/工作目录，规则与 cmd/wild-view 的 workDir() 保持一致：
 // WILDWORK_HOME > .app bundle（~/Library/Application Support/WildWork）> 二进制所在目录。
 // 日志落点必须与 app 实际写入的 state 目录同源，否则 plist 重定向会指向错误路径。
 func workDirFor(prog string) string {
-	if v := os.Getenv("WILDWORK_HOME"); v != "" {
-		return v
+	for _, env := range []string{"WILDVIEW_HOME", "WILDWORK_HOME"} {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
 	}
 	dir := filepath.Dir(prog)
 	if strings.Contains(dir, ".app/Contents/MacOS") {
 		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "WildWork")
+			return filepath.Join(home, "Library", "Application Support", "WildView")
 		}
 	}
 	return dir

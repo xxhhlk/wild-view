@@ -18,8 +18,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"wild-work/internal/provider"
-	statsEngine "wild-work/internal/stats"
+	"wild-view/internal/provider"
+	statsEngine "wild-view/internal/stats"
 )
 
 // StatsFeedInterval 喂入周期：进程内直调成本极低，30s 与前端轮询节奏对齐

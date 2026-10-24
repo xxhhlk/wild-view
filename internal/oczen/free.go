@@ -11,7 +11,7 @@ package oczen
 import (
 	"strings"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // freeIDs 已知免费模型元数据（models.dev 目录 + 2026-09 实测上下文/能力）。

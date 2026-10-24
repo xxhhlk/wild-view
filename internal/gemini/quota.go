@@ -36,8 +36,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // quotaLoc 配额重置时间的墙钟口径（UTC+8），与 provider 的 expireLoc 同值。

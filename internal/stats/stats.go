@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // Version 引擎载荷语义版本（Snapshot.Version 透出，结构演进时 bump）。

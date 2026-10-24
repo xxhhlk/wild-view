@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // innerStatusRE 从压平的响应体里取**内层**状态码。

@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // snapBody 默认快照的 data 段（活动开启、业务日 2026-10-17、三档、今日未领）。

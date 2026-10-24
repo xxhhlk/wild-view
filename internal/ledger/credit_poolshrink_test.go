@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // shrinkItem 造一个「三字段独立上报、无到期日」的条目（QoderCN/QoderCOM 的真实形态）。

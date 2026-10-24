@@ -48,7 +48,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // probeCase 单个探测用例：id + 说明 + 额外注入 body 的字段。

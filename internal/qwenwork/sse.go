@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/loopguard"
-	"wild-work/internal/provider"
+	"wild-view/internal/loopguard"
+	"wild-view/internal/provider"
 )
 
 // sseError 流内业务错误（envelope 内嵌 HTTP 状态码）。实现 provider.StreamErrorClassifier，

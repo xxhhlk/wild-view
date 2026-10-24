@@ -59,7 +59,7 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // ErrPending 表示登录尚未完成（用户还没提交验证码，或验证码还没通过）。

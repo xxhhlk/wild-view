@@ -16,8 +16,8 @@
 ## 1. 代码地图
 
 ```
-cmd/wild-work/main.go        入口：加载账号 → 构造查询客户端 → 管理 HTTP + 托盘
-cmd/wild-work/web/           静态 Web UI（index.html / app.js / style.css）
+cmd/wild-view/main.go        入口：加载账号 → 构造查询客户端 → 管理 HTTP + 托盘
+cmd/wild-view/web/           静态 Web UI（index.html / app.js / style.css）
 cmd/genicon/                 图标生成
 internal/
 ├── app/app.go               管理 API、登录编排、日志、额度刷新
@@ -67,7 +67,7 @@ internal/
 go build ./... && go vet ./... && go test ./...
 node scripts/ui-static-check.mjs
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags devdump \
-  -ldflags "-H windowsgui" -o dist/wild-view.exe ./cmd/wild-work
+  -ldflags "-H windowsgui" -o dist/wild-view.exe ./cmd/wild-view
 ```
 
 `internal/raccoon` 的两个日额度测试依赖固定日期，属存量失败。

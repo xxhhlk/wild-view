@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/reasoning"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/reasoning"
 )
 
 // contextConfig 形状：{"<label>": {"is_default":bool,"token_count":int}}

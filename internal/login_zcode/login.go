@@ -41,8 +41,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/zcode"
+	"wild-view/internal/auth"
+	"wild-view/internal/zcode"
 )
 
 // 上游常量：主机与身份头取值的**单一来源在 internal/zcode**（渠道包），

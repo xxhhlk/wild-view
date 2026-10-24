@@ -21,9 +21,9 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/idle"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/idle"
+	"wild-view/internal/provider"
 )
 
 // Client 上游 HTTP 客户端。Base 可覆盖以便测试。

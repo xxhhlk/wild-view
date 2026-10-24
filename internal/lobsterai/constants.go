@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // ---------------------------------------------------------------------------

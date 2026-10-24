@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 华为 AgentArts / APIG 网关错误码 → provider.ErrKind 分类。

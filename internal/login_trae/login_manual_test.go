@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/traework"
+	"wild-view/internal/traework"
 )
 
 func writeTestState(t *testing.T, st state) string {

@@ -27,8 +27,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/provider"
-	"wild-work/internal/upstream"
+	"wild-view/internal/provider"
+	"wild-view/internal/upstream"
 )
 
 // benefitLoc benefit 免费额度的墙钟口径：**UTC+8 自然日**（协议 §2.6(a)）。

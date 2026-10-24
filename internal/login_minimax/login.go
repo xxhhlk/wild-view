@@ -36,8 +36,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/minimax"
+	"wild-view/internal/auth"
+	"wild-view/internal/minimax"
 )
 
 // 上游常量：主机与 OAuth 客户端常量的**单一来源在 internal/minimax**（渠道包），

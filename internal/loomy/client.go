@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/reasoning"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/reasoning"
 )
 
 // Client 讯飞 Loomy 上游客户端。

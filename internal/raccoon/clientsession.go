@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // 本机小浣熊客户端（box-agent）会话文件候选，与 internal/app/import_local.go 的

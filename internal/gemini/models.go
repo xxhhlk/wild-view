@@ -7,7 +7,7 @@ package gemini
 import (
 	"strings"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // StaticModels 静态模型表（协议 §2.6：**纯静态表**，用户 2026-10-03 拍板不拉远端目录）。

@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/raccoon"
+	"wild-view/internal/raccoon"
 )
 
 // 本测试锁定一个**真实 bug**（2026-10-05 用户报告）：
 //
 //	小浣熊走「浏览器授权登录」时，`internal/raccoon/protocol*.go` 定义了
 //	`CallbackFlag = "--raccoon-callback"`（登录期间写入注册表命令行），
-//	`raccoon.SaveCallback` 也实现好了 —— 但 **cmd/wild-work/main.go 从未解析这个 flag**。
+//	`raccoon.SaveCallback` 也实现好了 —— 但 **cmd/wild-view/main.go 从未解析这个 flag**。
 //
 // 后果（不报错、不崩溃，但功能完全不可用）：
 //  1. 用户在网页点授权 → Windows 按注册表命令行拉起 `wild-work.exe --raccoon-callback <深链>`

@@ -1,4 +1,4 @@
-module wild-work
+module wild-view
 
 go 1.25.0
 

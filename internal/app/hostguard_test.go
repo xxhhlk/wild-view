@@ -10,7 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"wild-work/internal/config"
+	"wild-view/internal/config"
 )
 
 // newHostGuardApp 构造只用于 Host 校验测试的最小 App。

@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // desktopCampaignsPayload 桌面端 main.log 中裁剪出的真实响应（字段形状原样保留）。

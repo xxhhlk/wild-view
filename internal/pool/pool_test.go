@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 func TestPickHighestCredits(t *testing.T) {

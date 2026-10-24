@@ -48,8 +48,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // checkinHost 签到 API 域名（与业务 API 同域 openapi.qoder.sh）。

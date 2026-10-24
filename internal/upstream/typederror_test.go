@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // 本文件锁定 R79：目录/费率接口遇 HTTP ≥400 必须返回**类型化** *Error。

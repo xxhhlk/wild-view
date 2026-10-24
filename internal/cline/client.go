@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/backuplink"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/backuplink"
+	"wild-view/internal/provider"
 )
 
 // Client 实现 provider.Upstream。

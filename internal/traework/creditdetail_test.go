@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // entUsageBody 构造一份 web_user_ent_usage 响应：

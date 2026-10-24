@@ -26,7 +26,7 @@ package cline
 import (
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 const Kind = provider.Cline

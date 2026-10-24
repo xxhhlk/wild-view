@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // Client 小浣熊（官方托管网关 xiaohuanxiong.com）上游客户端。

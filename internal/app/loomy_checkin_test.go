@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 本测试锁定「Loomy 的每日积分领取已接线且不会再静默失效」（2026-10-17）。
@@ -53,7 +53,7 @@ func TestLoomyCheckinWiring(t *testing.T) {
 	}
 
 	// ③ 前端名单：NO_EXPLICIT_CHECKIN 不得再包含 "loomy"。
-	js, err := os.ReadFile("../../cmd/wild-work/web/app.js")
+	js, err := os.ReadFile("../../cmd/wild-view/web/app.js")
 	if err != nil {
 		t.Fatalf("读 app.js 失败: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestLoomyCheckinWiring(t *testing.T) {
 
 	// ④ 定时签到必须真的被打开（R39：传显式空切片 = 本渠道无此类任务）。
 	//    只加渠道实现而不配调度器，是最隐蔽的一种「功能没生效」。
-	mainSrc, err := os.ReadFile("../../cmd/wild-work/main.go")
+	mainSrc, err := os.ReadFile("../../cmd/wild-view/main.go")
 	if err != nil {
 		t.Fatalf("读 main.go 失败: %v", err)
 	}

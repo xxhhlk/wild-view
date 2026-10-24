@@ -12,7 +12,7 @@ import (
 //
 // 背景：这条链路跨三个文件，任一处写错都**不报错**，只表现为「点了没反应 / 永远转圈 / 永远失败」：
 //
-//	cmd/wild-work/web/app.js   POST /api/login/officeace_auto          → 拿 auth_url
+//	cmd/wild-view/web/app.js   POST /api/login/officeace_auto          → 拿 auth_url
 //	                           GET  /api/login/officeace_auto_status   → 读 status/nickname/error
 //	internal/app/app.go        officeAceLoginStatus（字段名的唯一来源）
 //	internal/officeace/login.go LoginSession.status 取值（pending…canceled）
@@ -32,7 +32,7 @@ func readAppJS(t *testing.T) string {
 		return string(raw)
 	}
 	// 包目录相对路径在 CI 的 cwd 下可能不同，直接按仓库布局再试一次。
-	raw, err = os.ReadFile("../../cmd/wild-work/web/app.js")
+	raw, err = os.ReadFile("../../cmd/wild-view/web/app.js")
 	if err != nil {
 		t.Fatalf("读前端 app.js 失败（签名变化会让本测试静默失效）：%v", err)
 	}

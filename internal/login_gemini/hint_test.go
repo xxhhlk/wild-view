@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/gemini"
+	"wild-view/internal/gemini"
 )
 
 // TestGeminiErrorHint 已知上游 OAuth 错误必须带可行动引导（issue #167）：

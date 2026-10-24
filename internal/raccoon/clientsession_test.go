@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // makeJWT 构造未签名的三段式 JWT（jwtName/jwtExp 只解 payload，签名段内容无所谓）。

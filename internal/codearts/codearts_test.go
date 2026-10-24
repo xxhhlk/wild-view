@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // 签名向量里用到的固定输入（与 temp/sigvector.ps1 完全一致）。

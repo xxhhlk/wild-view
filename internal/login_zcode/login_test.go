@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // useServer 把包级 endpointOrigin 指向假上游，并在用例结束时恢复。

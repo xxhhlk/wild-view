@@ -55,8 +55,8 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/gemini"
+	"wild-view/internal/auth"
+	"wild-view/internal/gemini"
 )
 
 // 端点取值：**默认取自 internal/gemini**（单一来源），独立成变量的唯一目的是让回归测试

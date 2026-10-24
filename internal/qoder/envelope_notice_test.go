@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 func mustJSON(t *testing.T, v any) string {

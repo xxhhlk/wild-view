@@ -3,7 +3,7 @@ package raccoon
 import (
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestSplitAggregatesToSameLedgerKey 拆分后的条目按 ledger.itemKey 聚合，

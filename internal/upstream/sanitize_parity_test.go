@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/sanitize"
-	"wild-work/internal/upstream"
+	"wild-view/internal/sanitize"
+	"wild-view/internal/upstream"
 )
 
 // 覆盖两表全部特征形态；每条都必须经两条路径得到同一结果。

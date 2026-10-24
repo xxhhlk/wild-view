@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // TestCheckinSessionCredentialReachesImplementation 长会话账号必须真的被签到。

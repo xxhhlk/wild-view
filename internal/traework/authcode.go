@@ -21,7 +21,7 @@ import (
 	"os"
 	"strings"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // EpAuthCodeExchange AuthCode 交换端点（首次换 token 无签名，对齐 codex-app-transfer 逆向实现）。

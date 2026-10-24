@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // TestUserResourceDetailCarriesExpiryAndUsable 明细须带到期日与可用标记。

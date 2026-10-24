@@ -28,8 +28,8 @@ import (
 	"log"
 	"net/http"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // settingInfoResp /api/web/office/v3/setting_info 的响应（2026-10-15 实测）。

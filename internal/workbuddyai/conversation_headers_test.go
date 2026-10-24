@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // convIDPattern 官方客户端抓包形态：带连字符 UUID（v4）。抓包里 v4/v7 均

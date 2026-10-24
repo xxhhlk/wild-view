@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/config"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/config"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // 本文件锁定 **「缺 refresh_token」的持久徽标**（改进2，2026-10-17 用户实测要求）。
@@ -118,13 +118,13 @@ func TestRefreshTokenMissing(t *testing.T) {
 //     确认调用后行为符合预期——特别是不允许出现 `unknown login provider`。
 //     （其余渠道会真的去起登录流程，这里只做第 1 层的源码比对。）
 func TestReloginChannelSetMatchesBackend(t *testing.T) {
-	js, err := os.ReadFile("../../cmd/wild-work/web/app.js")
+	js, err := os.ReadFile("../../cmd/wild-view/web/app.js")
 	if err != nil {
 		t.Fatalf("读 app.js 失败：%v", err)
 	}
 	m := regexp.MustCompile(`const RELOGIN_CHANNELS = new Set\(\[([^\]]*)\]\)`).FindSubmatch(js)
 	if m == nil {
-		// 本仓 cmd/wild-work/web 三件套保留 v2.9.0 版（B 决策，见 docs/决议项.md），
+		// 本仓 cmd/wild-view/web 三件套保留 v2.9.0 版（B 决策，见 docs/决议项.md），
 		// 尚未吸收上游面板升级 ⇒ 前端没有 ⟳ 重登入口，本用例的比对对象不存在。
 		// 吸收面板后本跳过自动失效（正则能命中即恢复校验）。
 		t.Skip("本仓面板未吸收上游 UI（B 决策）：无 RELOGIN_CHANNELS，前端契约暂不适用")
@@ -232,7 +232,7 @@ func TestAccountViewCarriesRefreshTokenMissing(t *testing.T) {
 	// 前端契约：app.js 读的字段名必须与 Go 侧 json tag 一致（历史上多次因改名而两边脱节）。
 	// 判据取源码文本（同 monkeycode/loomy 的既有做法），避免「改了 tag 忘了前端」这类
 	// 只在运行时才暴露的问题。
-	src, err := os.ReadFile("../../cmd/wild-work/web/app.js")
+	src, err := os.ReadFile("../../cmd/wild-view/web/app.js")
 	if err != nil {
 		t.Fatalf("读 app.js 失败：%v", err)
 	}

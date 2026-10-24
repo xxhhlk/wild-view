@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // waitEntered 等所有 goroutine 都已进入 RefreshOnce，再留一点余量让它们落到 flight 表上。

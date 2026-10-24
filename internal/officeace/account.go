@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // Account 是 OfficeAce 渠道的一个账号（华为云 IAM 账号）在内存里的表示。

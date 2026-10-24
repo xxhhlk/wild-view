@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 func mustMarshal(t *testing.T, v any) string {

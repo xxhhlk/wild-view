@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // catalog.go 模型目录与倍率的账号作用域缓存。

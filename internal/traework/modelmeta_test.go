@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // serveWorkPool 只回应本渠道池（另一池 500，走「另一池失败只记日志」分支）。

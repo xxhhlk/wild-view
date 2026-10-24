@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // TestFetchModelsPassesThroughReasoning 目录 reasoning 对象应原样投影进 ModelInfo。

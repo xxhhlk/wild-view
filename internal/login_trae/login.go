@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/traework"
+	"wild-view/internal/auth"
+	"wild-view/internal/traework"
 )
 
 var ErrPending = errors.New("login pending")

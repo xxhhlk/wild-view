@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/ledger"
-	"wild-work/internal/provider"
+	"wild-view/internal/ledger"
+	"wild-view/internal/provider"
 )
 
 // TestExpiryDayAmount 临期喂入口径：可用条目按日归组，取最早到期日 + 当日合计。

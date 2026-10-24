@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/codearts"
+	"wild-view/internal/auth"
+	"wild-view/internal/codearts"
 )
 
 // fakeSTS 假 STS：记录 form 与 DPoP 头，返回固定凭据。

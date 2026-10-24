@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // mockChatGLM 模拟 chatglm.cn 的私有接口，用于端到端验证本渠道的完整链路。

@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
-	"wild-work/internal/upstream"
+	"wild-view/internal/auth"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
+	"wild-view/internal/upstream"
 )
 
 func TestNextFire(t *testing.T) {

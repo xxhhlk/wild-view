@@ -5,7 +5,7 @@ package upstream
 import (
 	"net/http"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // 官方 WorkBuddy 桌面客户端身份（2026-10-21 对本机 /Applications/WorkBuddy.app 5.8.3

@@ -4,10 +4,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/config"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/config"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // newAliasApp 构造 TraeWork（主渠道）+ TraeCode（别名，复用同一 Pool）的最小 App。

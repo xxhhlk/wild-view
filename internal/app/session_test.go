@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/config"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/config"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // newPanelApp 构造一个带单渠道、单账号的最小 App，用于面板鉴权回归测试。

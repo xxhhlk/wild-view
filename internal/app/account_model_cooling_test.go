@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/config"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/config"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // TestAccountViewExposesModelCooling /api/state 的账号视图必须带上模型级冷却。

@@ -9,7 +9,7 @@
 package qodercn
 
 import (
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 上游域名与端点（CN only）。

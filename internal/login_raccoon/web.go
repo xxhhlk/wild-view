@@ -34,8 +34,8 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/cdp"
-	"wild-work/internal/raccoon"
+	"wild-view/internal/cdp"
+	"wild-view/internal/raccoon"
 )
 
 // WebLoginURL 小浣熊网页版登录入口（2026-10-15 上游迁站后）。

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // nestedRateLimitFrame 上游真实的排队/限流拒绝帧：HTTP 200，失败信息在信封里。

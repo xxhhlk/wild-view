@@ -45,7 +45,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // sidOf 取 refresh_token 的 JWT `sid` 声明哈希（判断是否同一会话；不泄露原值）。

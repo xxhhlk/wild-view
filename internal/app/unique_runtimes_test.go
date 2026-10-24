@@ -3,9 +3,9 @@ package app
 import (
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // TestUniqueRuntimesDedupesSharedPool 锁定「共享账号池的渠道在账号维度只出现一次」。

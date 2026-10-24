@@ -46,8 +46,8 @@ import (
 	"net/http"
 	"strings"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // PetWorkConfigVersion 上游活动配置版本。快照会下发权威值；这里只是兜底。

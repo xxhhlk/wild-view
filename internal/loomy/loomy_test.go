@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/reasoning"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/reasoning"
 )
 
 // TestClassifyBusinessCodeFirst 守门：Loomy 的鉴权失败是 **HTTP 200 + code 100002**，

@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/monkeycode"
-	"wild-work/internal/officeace"
-	"wild-work/internal/provider"
-	"wild-work/internal/raccoon"
+	"wild-view/internal/monkeycode"
+	"wild-view/internal/officeace"
+	"wild-view/internal/provider"
+	"wild-view/internal/raccoon"
 )
 
 // 本文件实现「导入型」渠道的凭据获取：小浣熊（raccoon）与 Loomy。

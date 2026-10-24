@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // PKCEVerifierBytes PKCE code_verifier 的随机字节数（协议 §2.2：48 字节 base64url）。

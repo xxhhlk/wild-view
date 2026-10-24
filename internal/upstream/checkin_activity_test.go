@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // activityUpstream 假上游：按路径分发活动状态与领取结果，并统计写请求次数。

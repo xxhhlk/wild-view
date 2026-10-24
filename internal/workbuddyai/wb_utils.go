@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strings"
 
-	"wild-work/internal/reasoning"
-	"wild-work/internal/sanitize"
-	"wild-work/internal/upstream"
+	"wild-view/internal/reasoning"
+	"wild-view/internal/sanitize"
+	"wild-view/internal/upstream"
 )
 
 // ---------------------------------------------------------------------------

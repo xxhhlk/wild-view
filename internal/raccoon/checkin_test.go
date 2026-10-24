@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // TestCheckinClaimed 首次调用（popups 非空）→ claimed + 金额正确。

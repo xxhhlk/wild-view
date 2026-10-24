@@ -27,8 +27,8 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // Client 上游 HTTP 客户端。Base / BenefitBase / STSURL 可覆盖以便测试。

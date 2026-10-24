@@ -8,10 +8,10 @@ package scheduler
 import (
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/ledger"
-	"wild-work/internal/pool"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/ledger"
+	"wild-view/internal/pool"
+	"wild-view/internal/provider"
 )
 
 // granterUpstream 内嵌 Upstream，只实现 CheckinGranter（对齐 reporterUpstream 的嵌入模式）。

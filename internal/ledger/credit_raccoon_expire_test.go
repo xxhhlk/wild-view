@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestRaccoonDailyExpireNotSpend R107 生产实录回归：小浣熊每日积分 7 天到期清零

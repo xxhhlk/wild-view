@@ -9,8 +9,8 @@ import (
 	"log"
 	"strings"
 
-	"wild-work/internal/reasoning"
-	"wild-work/internal/sanitize"
+	"wild-view/internal/reasoning"
+	"wild-view/internal/sanitize"
 )
 
 // PrepareBody 单 pass 改写；无法解析时原样返回。

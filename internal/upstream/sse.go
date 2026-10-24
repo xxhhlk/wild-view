@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/loopguard"
-	"wild-work/internal/provider"
+	"wild-view/internal/loopguard"
+	"wild-view/internal/provider"
 )
 
 // errEmptyStream 上游返回 200 但没有有效 SSE 数据帧（空流/只有注释/[DONE]）。

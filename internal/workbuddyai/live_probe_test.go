@@ -36,8 +36,8 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/reasoning"
+	"wild-view/internal/auth"
+	"wild-view/internal/reasoning"
 )
 
 // liveAuth 从 WILDWORK_AUTHDIR（默认 ./auths）加载第一个 workbuddyai 账号。

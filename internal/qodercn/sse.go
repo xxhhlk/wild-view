@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/loopguard"
-	"wild-work/internal/provider"
+	"wild-view/internal/loopguard"
+	"wild-view/internal/provider"
 )
 
 // sseError 是「HTTP 200 + 信封内嵌 statusCodeValue>=400」形态的流内业务错误。

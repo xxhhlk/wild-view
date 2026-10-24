@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/idle"
-	"wild-work/internal/provider"
-	"wild-work/internal/upstream"
+	"wild-view/internal/auth"
+	"wild-view/internal/idle"
+	"wild-view/internal/provider"
+	"wild-view/internal/upstream"
 )
 
 // 推理预算常量（对齐 officeace2api/src/config.mjs）：

@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/backuplink"
+	"wild-view/internal/auth"
+	"wild-view/internal/backuplink"
 )
 
 // 本文件锁死「地区限制 → 备用上游通道重放」这套编排（决议 R57）。

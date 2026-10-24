@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // itemSnap 快照里的单条目（只存差分所需字段）。

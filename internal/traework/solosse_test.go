@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/loopguard"
-	"wild-work/internal/provider"
+	"wild-view/internal/loopguard"
+	"wild-view/internal/provider"
 )
 
 // 本文件锁定「流内业务错误不得伪装成正常收尾」这一行为（2026-10-02 修复）。

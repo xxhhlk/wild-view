@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/idle"
+	"wild-view/internal/idle"
 )
 
 // 回归（R58）：空闲看门狗掐断的流，出口必须能自证「是被我们掐的」。

@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/gemini"
+	"wild-view/internal/auth"
+	"wild-view/internal/gemini"
 )
 
 // fakeIDToken 造一个只含 sub/email 的"id_token"（不验签，解码 payload 即得身份）。

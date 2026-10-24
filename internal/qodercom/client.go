@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
-	"wild-work/internal/reasoning"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
+	"wild-view/internal/reasoning"
 )
 
 // Client QoderCOM 上游客户端。

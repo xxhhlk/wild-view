@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 本测试锁定「MonkeyCode 已实装签到」（2026-10-17）。
@@ -16,7 +16,7 @@ import (
 //
 //	① internal/monkeycode/checkin.go   渠道实现（DailyCheckinReport）+ 删除旧桩
 //	② internal/app/app.go              noExplicitCheckin 移除 MonkeyCode（开放手动按钮）
-//	③ cmd/wild-work/web/app.js         NO_EXPLICIT_CHECKIN 移除 "monkeycode"
+//	③ cmd/wild-view/web/app.js         NO_EXPLICIT_CHECKIN 移除 "monkeycode"
 //
 // 只表现为「按钮是灰的」或「批量签到静默跳过」（R34/R41 同族），故用静态断言锁死。
 func TestMonkeyCodeCheckinWiring(t *testing.T) {
@@ -53,7 +53,7 @@ func TestMonkeyCodeCheckinWiring(t *testing.T) {
 	}
 
 	// ③ 前端：NO_EXPLICIT_CHECKIN 不得再包含 "monkeycode"。
-	jsSrc, err := os.ReadFile("../../cmd/wild-work/web/app.js")
+	jsSrc, err := os.ReadFile("../../cmd/wild-view/web/app.js")
 	if err != nil {
 		t.Fatalf("读 app.js 失败: %v", err)
 	}

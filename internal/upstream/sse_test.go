@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 func TestPrepareBodyForcesStream(t *testing.T) {

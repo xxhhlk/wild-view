@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"wild-work/internal/upstream"
+	"wild-view/internal/upstream"
 )
 
 // localErrMarkers 是 streamCore **本地合成**的兜底帧标识。

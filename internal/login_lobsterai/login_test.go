@@ -28,8 +28,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/lobsterai"
+	"wild-view/internal/auth"
+	"wild-view/internal/lobsterai"
 )
 
 // withTestEndpoint 把包内 endpointHost / clientVersionFn 指向测试替身，测试结束恢复。

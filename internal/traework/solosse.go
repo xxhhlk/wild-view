@@ -33,8 +33,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/loopguard"
-	"wild-work/internal/provider"
+	"wild-view/internal/loopguard"
+	"wild-view/internal/provider"
 )
 
 // SOLOEvent 单条 SOLO SSE 事件（归一化）。

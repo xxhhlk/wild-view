@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/cdp"
+	"wild-view/internal/cdp"
 )
 
 func TestLiveGuestTokenBehavior(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 func TestDailyCheckinClaimsWhenNotCheckedIn(t *testing.T) {

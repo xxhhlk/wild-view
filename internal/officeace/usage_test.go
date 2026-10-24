@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 锁住云端「按日消耗」端点的三件事：

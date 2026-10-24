@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"strings"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/idle"
+	"wild-view/internal/auth"
+	"wild-view/internal/idle"
 )
 
 // assistantIDRe 清言 assistant_id 形状：24 位以上小写 hex（官方智能体 ID）。

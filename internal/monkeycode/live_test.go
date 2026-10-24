@@ -19,8 +19,8 @@ import (
 	"os"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 func TestLiveCheckin(t *testing.T) {

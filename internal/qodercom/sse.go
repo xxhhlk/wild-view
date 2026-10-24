@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/loopguard"
-	"wild-work/internal/provider"
+	"wild-view/internal/loopguard"
+	"wild-view/internal/provider"
 )
 
 // parseNestedSSE 逐行解析嵌套 SSE，每个有效 chunk 调 onChunk。

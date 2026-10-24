@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/config"
+	"wild-view/internal/config"
 )
 
 // 本文件锁定「从客户端导入」**不得覆盖** OAuth 登录凭据（importOfficeAce → writeOfficeAceAuth 的按字段合并）。

@@ -19,7 +19,7 @@ package oczen
 import (
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 const (

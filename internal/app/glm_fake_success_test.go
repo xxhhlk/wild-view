@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestGLMDisplayURLDoesNotFakeSuccess 锁定 H9：GLM 属于「只给链接、不跑流程」的渠道，
@@ -57,7 +57,7 @@ func TestGLMDisplayURLDoesNotFakeSuccess(t *testing.T) {
 	}
 
 	// ③ 前端必须真的读了它，且在不轮询的分支里 return（不能落回 startLoginPoll）。
-	js, err := os.ReadFile("../../cmd/wild-work/web/app.js")
+	js, err := os.ReadFile("../../cmd/wild-view/web/app.js")
 	if err != nil {
 		t.Fatalf("读 app.js 失败: %v", err)
 	}

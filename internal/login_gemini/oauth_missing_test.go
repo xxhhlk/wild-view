@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/gemini"
+	"wild-view/internal/gemini"
 )
 
 // clearOAuthClientEnv 让 gemini.ClientID()/ClientSecret() 在这一进程返回空串，用例结束后还原。

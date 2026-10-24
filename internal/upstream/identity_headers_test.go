@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"testing"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // TestChatIdentityChain 官方桌面 5.8.3 + 内嵌 CLI 2.161.0 的完整身份串。

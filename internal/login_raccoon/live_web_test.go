@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/raccoon"
+	"wild-view/internal/auth"
+	"wild-view/internal/raccoon"
 )
 
 // authForTest 把捕获结果包成 auth.Auth（仅内存，不落盘）。

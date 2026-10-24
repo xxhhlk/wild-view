@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/codearts"
+	"wild-view/internal/codearts"
 )
 
 // TestSubmitCallbackURLBareCode 只贴裸授权码也能登录（Poll 走同一兑换路径）。

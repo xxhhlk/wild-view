@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"wild-work/internal/loopguard"
-	"wild-work/internal/provider"
+	"wild-view/internal/loopguard"
+	"wild-view/internal/provider"
 )
 
 // 上游已是标准 OpenAI SSE（`data: {...}` + 结尾 `data: [DONE]`），

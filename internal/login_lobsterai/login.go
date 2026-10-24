@@ -46,8 +46,8 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/lobsterai"
+	"wild-view/internal/auth"
+	"wild-view/internal/lobsterai"
 )
 
 const (

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 const (

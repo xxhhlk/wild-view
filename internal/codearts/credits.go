@@ -25,8 +25,8 @@ import (
 	"strconv"
 	"strings"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // flexFloat 兼容上游把数值写成字符串（"800.00"）或数字两种形态。

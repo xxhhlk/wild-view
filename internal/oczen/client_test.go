@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestCanonicalSessionID 会话头须为官方形状+官方编码

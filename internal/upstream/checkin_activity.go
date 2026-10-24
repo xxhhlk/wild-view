@@ -38,8 +38,8 @@ import (
 	"log"
 	"net/http"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/provider"
+	"wild-view/internal/auth"
+	"wild-view/internal/provider"
 )
 
 // checkinActivityPath 签到活动状态端点（国内版与国际版同路径，实测 2026-10-17）。

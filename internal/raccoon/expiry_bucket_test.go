@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // TestDailyExpiryFeedsExpireBuckets 拆分后的逐笔条目必须能被 stats 的三列到期桶

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // TestHeaderTimeoutAtLeast180s 守门：等响应头的上限不得退回 60s（R118）。

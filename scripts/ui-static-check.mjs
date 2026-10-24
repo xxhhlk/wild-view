@@ -8,8 +8,8 @@
 // 用法：node ui-static-check.mjs
 import { readFileSync } from "node:fs";
 
-const raw = readFileSync(new URL("../cmd/wild-work/web/app.js", import.meta.url), "utf8");
-const html = readFileSync(new URL("../cmd/wild-work/web/index.html", import.meta.url), "utf8");
+const raw = readFileSync(new URL("../cmd/wild-view/web/app.js", import.meta.url), "utf8");
+const html = readFileSync(new URL("../cmd/wild-view/web/index.html", import.meta.url), "utf8");
 
 // 把 `let state = null;` 改成假数据，并暴露待测函数（app.js 是脚本，函数是顶层声明）。
 const FAKE_STATE = {

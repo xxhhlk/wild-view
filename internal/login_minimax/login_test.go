@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // withTestHost 把包内 endpointHost 指向本机测试服务，测试结束恢复。

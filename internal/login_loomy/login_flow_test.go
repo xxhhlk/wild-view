@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // fakeUpstream 是一个**假的讯飞账号服务**（httptest）。

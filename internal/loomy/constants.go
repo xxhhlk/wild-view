@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"wild-work/internal/provider"
+	"wild-view/internal/provider"
 )
 
 // 上游域名与端点。

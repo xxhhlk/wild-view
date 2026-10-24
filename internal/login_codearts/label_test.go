@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"wild-work/internal/auth"
-	"wild-work/internal/codearts"
+	"wild-view/internal/auth"
+	"wild-view/internal/codearts"
 )
 
 // TestSaveAuthLabelWinsAndEnablesMultiAccount 守门「账号标识」（2026-10-17，用户要求）：

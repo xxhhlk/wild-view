@@ -64,8 +64,8 @@ jobs:
         if: matrix.needs_rsrc
         run: |
           go install github.com/akavel/rsrc@latest
-          cp build/windows/icon.ico cmd/wild-work/icon.ico
-          rsrc -ico cmd/wild-work/icon.ico -o cmd/wild-work/rsrc_windows_amd64.syso
+          cp build/windows/icon.ico cmd/wild-view/icon.ico
+          rsrc -ico cmd/wild-view/icon.ico -o cmd/wild-view/rsrc_windows_amd64.syso
 
       # 本仓约定：构建统一带 -tags devdump（devdump 取证能力常态编入；
       # 运行期仍由 WILDWORK_DUMP_DIR 环境变量控制，未设置时零开销）。
@@ -75,8 +75,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: ${{ matrix.cgo }}
         run: |
-          OUT="dist/wild-work-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
-          go build -tags devdump -ldflags "${{ matrix.ldflags }}" -o "$OUT" ./cmd/wild-work
+          OUT="dist/wild-view-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+          go build -tags devdump -ldflags "${{ matrix.ldflags }}" -o "$OUT" ./cmd/wild-view
 
       # 前端静态检查（脚本随仓库走，见 scripts/ui-static-check.mjs）：
       # 断言冷却标签/汇总条渲染正确，且顶层函数/常量**不得重复定义**
@@ -141,7 +141,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: dist/wild-work-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
+          path: dist/wild-view-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
 
       # dmg 单独作为 artifact 上传。release job 会 find 平铺 artifacts/ 下所有文件，
       # 因此这里不需要改 release 逻辑，dmg 会自动进入 release 资产。
@@ -186,7 +186,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
             # release note 取自仓库根目录的 RELEASES.md（按版本从旧到新，新版本 append 到末尾），
-            # 截取对应版本段落（`# wild-work <tag>` 起，到下一个 `# wild-work vX.Y.Z` 止）作为手写摘要，
+            # 截取对应版本段落（`# wild-view <tag>` 起，到下一个 `# wild-view vX.Y.Z` 止）作为手写摘要，
             # 而非 --generate-notes（后者只给 commit 链接列表，没有面向用户的变更摘要）。
             # 兼容旧的独立文件 RELEASE-<tag>.md（若存在则优先）。
             # 都找不到时回退到 --generate-notes，不阻塞发版。
@@ -195,11 +195,11 @@ jobs:
               echo "=== 使用独立文件 $NOTES 作为 release note ==="
               gh release create "$TAG" release-assets/* --title "$TAG" --notes-file "$NOTES"
             elif [[ -f RELEASES.md ]]; then
-              # 段落边界用「下一个 `# wild-work vX.Y.Z`」而非版本号后缀比较，
+              # 段落边界用「下一个 `# wild-view vX.Y.Z`」而非版本号后缀比较，
               # 避免 v2.6.3 误匹配到 v2.6.30 之类的标题。
               awk -v tag="$TAG" '
-                $0 ~ ("^# wild-work " tag "([^0-9.]|$)") { p=1 }
-                p && /^# wild-work / && $0 !~ ("^# wild-work " tag "([^0-9.]|$)") { exit }
+                $0 ~ ("^# wild-view " tag "([^0-9.]|$)") { p=1 }
+                p && /^# wild-view / && $0 !~ ("^# wild-view " tag "([^0-9.]|$)") { exit }
                 p { print }
               ' RELEASES.md > /tmp/release-notes.md
               if [[ -s /tmp/release-notes.md ]]; then

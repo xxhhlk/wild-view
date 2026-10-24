@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"wild-work/internal/auth"
+	"wild-view/internal/auth"
 )
 
 // CoolKind 冷却类型。

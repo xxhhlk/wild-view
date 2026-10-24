@@ -26,14 +26,14 @@ wild-view 由 [wild-work](https://github.com/xxhhlk/wild-work) 派生（基线 `
 9. **不把不同口径相加**：积分、Token、窗口百分比、不同平台积分不得混算；Token 口径渠道不进积分曲线。
 10. **数据目录独立**：默认 exe 旁 `wild-view-data/`，可用 `WILDVIEW_HOME` 覆盖；不要读写 wild-work 的目录。
 11. **管理面板鉴权**：`admin_password` 为空时只允许监听环回地址；`/api/auth/*` 不加会话守卫，其余 `/api/*` 必须经过守卫。
-12. **前端与后端路由同源**：新增/删除 `/api/*` 时必须同步 `cmd/wild-work/web/app.js`；
+12. **前端与后端路由同源**：新增/删除 `/api/*` 时必须同步 `cmd/wild-view/web/app.js`；
     `internal/app/frontend_routes_test.go` 与 `scripts/ui-static-check.mjs` 会守门。
 
 ## 2. 代码地图
 
 ```
-cmd/wild-work/main.go          入口：账号加载 → 查询客户端 → 管理 HTTP + 托盘
-cmd/wild-work/web/             纯静态 Web UI（index.html / app.js / style.css，go:embed）
+cmd/wild-view/main.go          入口：账号加载 → 查询客户端 → 管理 HTTP + 托盘
+cmd/wild-view/web/             纯静态 Web UI（index.html / app.js / style.css，go:embed）
 internal/app/app.go            管理 API、登录编排、日志
 internal/app/catalog.go        模型目录/倍率的账号作用域缓存（TTL、失败退避、原子持久化）
 internal/app/session.go        面板鉴权：cookie 会话 + 管理员密码
@@ -55,6 +55,6 @@ internal/<channel>/            各渠道查询客户端（目录/倍率/额度�
   曲线是绝对值，下降可能来自消耗、到期或套餐回收，不得称为"对话消耗"。
 - **纯签到能力**：`provider.SupportsPureCheckin` 列出不依赖对话的渠道；
   新增渠道若签到需要先发消息，必须排除。
-- **构建**：`CGO_ENABLED=0 go build -tags devdump -ldflags "-H windowsgui" -o dist/wild-view.exe ./cmd/wild-work`。
+- **构建**：`CGO_ENABLED=0 go build -tags devdump -ldflags "-H windowsgui" -o dist/wild-view.exe ./cmd/wild-view`。
 - **验证**：`go build ./... && go vet ./... && go test ./... && node scripts/ui-static-check.mjs`。
   `internal/raccoon` 的两个日额度测试依赖固定日期，属存量失败，与改动无关。
