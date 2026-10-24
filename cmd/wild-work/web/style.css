@@ -1151,3 +1151,18 @@ body {
 .st-fbs tr.fb-active { background: #fffbeb; }
 .st-fbs .fb-live { color: var(--warn); font-weight: 600; white-space: nowrap; }
 .st-fbs .fb-arrow { color: var(--muted, #94a3b8); text-align: center; padding: 0 6px; }
+
+/* 费率表：账号查询状态与按账号倍率 */
+.fees-accts { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 2px; }
+.fees-acct {
+  font-size: 12px; padding: 2px 8px; border-radius: 10px;
+  border: 1px solid var(--line, #d8dbe0); color: var(--fg-dim, #5a6270);
+  background: var(--bg-soft, #f6f7f9);
+}
+.fees-acct.acct-ok { border-color: #9fd3a8; color: #2f7d3d; }
+.fees-acct.acct-stale { border-color: #e6cf8b; color: #8a6d1f; }
+.fees-acct.acct-bad { border-color: #e3a2a2; color: #a33; }
+.rate-acct-list {
+  font-size: 11px; line-height: 1.4; margin-top: 2px;
+  color: var(--fg-dim, #5a6270); word-break: break-all;
+}

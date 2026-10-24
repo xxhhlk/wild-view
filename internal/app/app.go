@@ -73,6 +73,9 @@ type Runtime struct {
 	Upstream  provider.Upstream
 	Scheduler *scheduler.Scheduler
 
+	// StaticModels 渠道静态模型兜底（上游目录不可用时仍可展示已知模型）。
+	StaticModels []provider.ModelInfo
+
 	// Alias 标记该渠道与另一渠道共用同一账号池（如 TraeCode 复用 TraeWork 的 trPool）。
 	// 有别于上游/路由独立性，账号聚合类操作（状态列表、账号计数、批量签到/刷新、
 	// uid → 账号反查）必须跳过别名渠道，否则同一账号会被计入两次（见 issue #36）。
@@ -174,8 +177,11 @@ type App struct {
 	ledger     *ledger.Ledger
 	ledgerStop chan struct{}
 
+	// catalog 模型目录与倍率的账号作用域缓存（见 catalog.go）。
+	catalog *catalog
+
 	pricingMu      sync.Mutex
-	pricingCache   []provider.ModelPricing // 本地缓存
+	pricingCache   []provider.ModelPricing // 旧版渠道级缓存，仅用于兼容读取
 	pricingFetched time.Time
 	pricingErr     string // 最近一次拉取错误
 	pricingBusy    bool   // 防并发刷新（启动刷新与面板触发可能重叠）
@@ -192,6 +198,7 @@ func New(opts Options) (*App, error) {
 	}
 	a.loginStateFP = filepath.Join(filepath.Dir(opts.Config.StateFile), "login-state.json")
 	a.pricingFP = filepath.Join(filepath.Dir(opts.Config.StateFile), "pricing-cache.json")
+	a.catalog = newCatalog(filepath.Join(filepath.Dir(opts.Config.StateFile), "catalog-cache.json"))
 
 	// 用量/积分双流水（data/ledger/）：优先复用 main 装配的实例
 	if opts.Ledger != nil {
@@ -1320,15 +1327,8 @@ func (a *App) completeLogin(r login.Result) {
 // 若不主动失效缓存，两处都要等 TTL（1h / 1h）才更新，面板上显示不完整。
 // 故每个渠道登录成功后统一调用。
 func (a *App) afterAccountAdded(kind provider.Kind) {
-	// 1) 失效模型缓存后【必须】立即重建——否则其它渠道的模型缓存被误杀：
-	//    InvalidateModels 清空的是【全部渠道】的缓存，而 RefreshPricing 只拉费率不拉模型，
-	//    若只失效不重建，qodercn/qodercom 等无静态兑底渠道会从面板整组消失，
-	//    直到下一个 30min ticker（生产 2026-09-28 实测：登录 qwenwork 后 qoder 双渠道消失 28min）。
-	if a.handler != nil {
-		a.handler.InvalidateModels()
-		a.refreshChannelModels()
-	}
-	// 2) 立即刷新费率为后台任务，不阻塞登录流程
+	// 立即强制刷新目录与倍率（后台执行，不阻塞登录流程）。
+	// 按账号作用域刷新，不需要清空其它渠道的缓存。
 	a.safeGo(func() {
 		a.RefreshPricing()
 		log.Printf("account added platform=%s: models+pricing refreshed", kind)
@@ -2277,12 +2277,9 @@ func (a *App) StartPricingAutoRefresh(ctx context.Context, interval time.Duratio
 		interval = PricingRefreshInterval
 	}
 	go func() {
-		// 启动刷新：同时失效动态模型缓存，保证模型列表也是新的
-		if a.handler != nil {
-			a.handler.InvalidateModels()
-		}
-		a.refreshChannelModels() // 填充模型缓存（issue #40：面板只读缓存，必须有填充源）
-		a.RefreshPricing()
+		// 启动即补拉一次：目录与倍率都在 RefreshCatalog 内按 TTL 判断，
+		// 新鲜缓存不会重复打上游。之后每 interval 检查一次过期项。
+		a.RefreshCatalog(false)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -2290,28 +2287,10 @@ func (a *App) StartPricingAutoRefresh(ctx context.Context, interval time.Duratio
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				a.refreshChannelModels() // 同上：随费率一起周期性拉新
-				a.RefreshPricing()
+				a.RefreshCatalog(false)
 			}
 		}
 	}()
-}
-
-// refreshChannelModels 拉取各渠道模型列表并填充 handler 的模型缓存。
-//
-// 为什么必须有这一步（issue #40）：费率面板读 CachedChannelModels（只读缓存、
-// 不发网络请求），而缓存 rt.models 此前**只有 /v1/models 请求会填充**——
-// RefreshPricing 只拉费率不拉模型。于是冷启动后，凡无静态兑底表的渠道
-// （qodercn/qodercom）在面板上整组消失，直到某个客户端碰巧请求了 /v1/models。
-// 故模型列表的填充必须与费率刷新同样走后台定时路径。
-//
-// 网络开销可控：ChannelModels 内部 fetchRuntimeModels 自带 1h TTL 与
-// 5min 失败负缓存，与本函数的 30min 调度配合，不会打爆上游。
-func (a *App) refreshChannelModels() {
-	if a.handler == nil {
-		return
-	}
-	a.handler.ChannelModels()
 }
 
 // RefreshCredits 刷新单个账号积分（返回可消耗余额）。
@@ -2455,6 +2434,8 @@ func (a *App) RemoveAccount(uid string) error {
 		_ = os.Remove(au.FilePath)
 	}
 	rt.Pool.Remove(uid)
+	// 目录/倍率缓存同样按账号删除：否则删号后仍会显示该账号的查询结果。
+	a.catalog.remove(rt.Kind.String(), uid)
 	log.Printf("已删除账号 %s", shortUID(uid))
 	return nil
 }
@@ -4418,6 +4399,38 @@ type feesChannel struct {
 	// 时另走 POST /api/config/custom_channel_key 按需取，不随本接口批量下发。
 	BaseURL      string `json:"base_url,omitempty"`
 	APIKeyMasked string `json:"api_key_masked,omitempty"`
+	// Accounts 该渠道下每个账号的目录/倍率查询状态（按账号作用域查询）。
+	Accounts []feesAccount `json:"accounts,omitempty"`
+}
+
+// feesAccount 单个账号的目录与倍率查询概况。
+type feesAccount struct {
+	UID           string          `json:"uid"`
+	Nickname      string          `json:"nickname,omitempty"`
+	Models        int             `json:"models"`
+	Priced        int             `json:"priced"`
+	ModelsStatus  feesQueryStatus `json:"models_status"`
+	PricingStatus feesQueryStatus `json:"pricing_status"`
+}
+
+// feesQueryStatus 查询时效：成功/尝试时间、最近错误与来源。
+type feesQueryStatus struct {
+	LastSuccessAt string `json:"last_success_at,omitempty"`
+	LastAttemptAt string `json:"last_attempt_at,omitempty"`
+	LastError     string `json:"last_error,omitempty"`
+	Source        string `json:"source,omitempty"`
+	Stale         bool   `json:"stale,omitempty"`
+}
+
+// feesRate 同一模型在某账号上的倍率（行级按账号展开）。
+type feesRate struct {
+	UID      string  `json:"uid"`
+	Nickname string  `json:"nickname,omitempty"`
+	Priced   bool    `json:"priced"`
+	Rate     float64 `json:"rate"`
+	Free     bool    `json:"free"`
+	Note     string  `json:"note,omitempty"`
+	Source   string  `json:"source,omitempty"`
 }
 
 // feesModelRow 一行模型：来自渠道 models 列表，尽可能配上费率。
@@ -4450,6 +4463,8 @@ type feesModelRow struct {
 	// 只影响展示文案，不影响路由；与自定义渠道配置里的 cap_source 同源。
 	CapSource string `json:"cap_source,omitempty"`
 	// 能力标记（与 /v1/models 同源），供 UI 在模型 ID 后展示图标。
+	// Rates 各账号对同一模型的倍率（仅在渠道有多个账号时下发）。
+	Rates             []feesRate `json:"rates,omitempty"`
 	SupportsImages    bool `json:"supports_images"`
 	SupportsReasoning bool `json:"supports_reasoning"`
 	SupportsTools     bool `json:"supports_tools"`
@@ -4548,54 +4563,148 @@ func buildFeesChannels(modelsByKind map[provider.Kind][]provider.ModelInfo,
 // 以各渠道当前生效的模型列表为基准（与 /v1/models 同源），逐行配上费率：
 // 上游未返回倍率的模型标记 priced=false，前端显示 unknown。
 func (a *App) FeesInfo() map[string]any {
-	a.pricingMu.Lock()
-	cached := a.pricingCache
-	errMsg := a.pricingErr
-	stale := time.Since(a.pricingFetched) > time.Hour
-	a.pricingMu.Unlock()
+	scopes := a.catalog.snapshot()
+	now := time.Now()
 
-	// 缓存过期时后台静默刷新
-	if len(cached) > 0 && stale {
-		go a.safeGo(func() { a.RefreshPricing() })
+	modelsByKind := map[provider.Kind][]provider.ModelInfo{}
+	seen := map[provider.Kind]map[string]bool{}
+	pricing := make([]provider.ModelPricing, 0)
+	var newest int64
+	needRefresh := len(scopes) == 0
+	for _, sc := range scopes {
+		k := provider.Kind(sc.Channel)
+		if seen[k] == nil {
+			seen[k] = map[string]bool{}
+		}
+		for _, mi := range sc.Models {
+			if seen[k][mi.ID] {
+				continue
+			}
+			seen[k][mi.ID] = true
+			modelsByKind[k] = append(modelsByKind[k], mi)
+		}
+		pricing = append(pricing, sc.Pricing...)
+		for _, ts := range []int64{sc.ModelsStatus.LastSuccessAt, sc.PricingStatus.LastSuccessAt} {
+			if ts > newest {
+				newest = ts
+			}
+		}
+		if len(sc.Models) > 0 && !fresh(sc.ModelsStatus, now, catalogTTL) {
+			needRefresh = true
+		}
+	}
+	// 无账号渠道（自定义）的静态目录仍需展示。
+	for k, ms := range a.staticModelFallback() {
+		if len(modelsByKind[k]) == 0 {
+			modelsByKind[k] = ms
+		}
+	}
+	if needRefresh {
+		// 非强制刷新：只补拉过期/从未成功的项，新鲜数据不会重复打上游。
+		a.safeGo(func() { a.RefreshCatalog(false) })
 	}
 
-	// 面板秒开：模型列表只用缓存/静态兜底（不触发上游网络请求）。
-	// 后台 StartPricingAutoRefresh 每 30 分钟拉新并写入缓存，用户看到的是最近一次结果。
-	var modelsByKind map[provider.Kind][]provider.ModelInfo
-	if a.handler != nil {
-		modelsByKind = a.handler.CachedChannelModels()
-	} else {
-		modelsByKind = a.staticModelFallback()
-	}
-	if len(modelsByKind) == 0 {
-		modelsByKind = a.staticModelFallback()
-	}
-
-	// 首次加载且无缓存：异步拉取费率，先展示（unknown 占位）
-	if len(cached) == 0 {
-		go a.safeGo(func() { a.RefreshPricing() })
-	}
-
-	// 展示顺序固定（见 feeChannelOrder；旧 Qoder 跳过），**末尾追加动态自定义渠道**（R66）。
-	// 必须追加：feeChannelOrder 是静态表，自定义渠道不在其中，若不追加则
-	// 面板费率表永远不出现该渠道 tab（buildFeesChannels 只遍历传入的 order）——
-	// 这与 /v1/models、用量流水、运行统计的可见性不一致。按渠道名排序保证稳定顺序。
 	order := feeChannelOrderWithDynamic(modelsByKind)
-	channels := buildFeesChannels(modelsByKind, cached, order, a.cfg.Compat.ContextWindows)
+	channels := buildFeesChannels(modelsByKind, pricing, order, a.cfg.Compat.ContextWindows)
+	channels = attachCatalogScopes(channels, scopes)
 	a.applyCustomFeesMeta(&channels)
 
+	a.pricingMu.Lock()
+	errMsg := a.pricingErr
+	a.pricingMu.Unlock()
+
 	result := map[string]any{
-		"note":       "本表以各渠道实际可用模型列表为准；倍率为空的模型表示上游未返回定价（未知）。",
+		"note":       "按账号分别查询；倍率为空表示上游未返回定价（未知），不代表免费。",
 		"channels":   channels,
-		"disclaimer": "本工具仅聚合转发，不参与定价；渠道费率以各上游官方页面为准。",
+		"disclaimer": "本工具仅展示各渠道返回的额度与倍率，不参与定价；以各上游官方页面为准。",
+		"accounts":   len(scopes),
 	}
-	if len(cached) > 0 {
-		result["cached_at"] = a.pricingFetched.Format("01-02 15:04")
+	if newest > 0 {
+		result["cached_at"] = time.Unix(newest, 0).Format("01-02 15:04")
 	}
 	if errMsg != "" {
 		result["error"] = errMsg
 	}
 	return result
+}
+
+// attachCatalogScopes 把账号作用域快照挂到费率表上：
+// 渠道级 accounts 给出每个账号的查询状态，行级 rates 给出各账号对同一模型的倍率，
+// 便于识别「不同账号/等级倍率不同」或「某账号查询失败」。
+func attachCatalogScopes(channels []feesChannel, scopes map[string]CatalogAccount) []feesChannel {
+	byCh := map[string][]CatalogAccount{}
+	for _, sc := range scopes {
+		byCh[sc.Channel] = append(byCh[sc.Channel], sc)
+	}
+	for ch := range byCh {
+		list := byCh[ch]
+		sort.Slice(list, func(i, j int) bool { return list[i].UID < list[j].UID })
+	}
+	for i := range channels {
+		list := byCh[channels[i].Channel]
+		if len(list) == 0 {
+			continue
+		}
+		accounts := make([]feesAccount, 0, len(list))
+		for _, sc := range list {
+			priced := 0
+			for _, p := range sc.Pricing {
+				if p.IsExplicit() {
+					priced++
+				}
+			}
+			accounts = append(accounts, feesAccount{
+				UID:           sc.UID,
+				Nickname:      sc.Nickname,
+				Models:        len(sc.Models),
+				Priced:        priced,
+				ModelsStatus:  toFeesStatus(sc.ModelsStatus),
+				PricingStatus: toFeesStatus(sc.PricingStatus),
+			})
+		}
+		channels[i].Accounts = accounts
+
+		for r := range channels[i].Models {
+			row := &channels[i].Models[r]
+			rates := make([]feesRate, 0, len(list))
+			for _, sc := range list {
+				fr := feesRate{UID: sc.UID, Nickname: sc.Nickname, Source: "unknown"}
+				for k := range sc.Pricing {
+					p := sc.Pricing[k]
+					if p.Model != row.Model {
+						continue
+					}
+					fr.Priced = p.IsExplicit()
+					fr.Rate = p.Rate
+					fr.Free = p.IsExplicit() && p.Rate == 0
+					fr.Note = p.Note
+					fr.Source = sc.PricingStatus.Source
+					if fr.Source == "" {
+						fr.Source = "api"
+					}
+					break
+				}
+				rates = append(rates, fr)
+			}
+			if len(rates) > 1 {
+				row.Rates = rates
+			}
+		}
+	}
+	return channels
+}
+
+// toFeesStatus 把内部 Unix 秒状态转成面板可读的时间与陈旧标记。
+func toFeesStatus(s QueryStatus) feesQueryStatus {
+	out := feesQueryStatus{LastError: s.LastError, Source: s.Source}
+	if s.LastSuccessAt > 0 {
+		out.LastSuccessAt = time.Unix(s.LastSuccessAt, 0).Format("01-02 15:04")
+	}
+	if s.LastAttemptAt > 0 {
+		out.LastAttemptAt = time.Unix(s.LastAttemptAt, 0).Format("01-02 15:04")
+	}
+	out.Stale = s.LastSuccessAt <= 0 || time.Since(time.Unix(s.LastSuccessAt, 0)) > catalogTTL
+	return out
 }
 
 // capSourceOf 把 ModelInfo 的三个互斥来源位归成一个字符串，给面板逐行标注（R119）。
@@ -4646,9 +4755,13 @@ func (a *App) staticModelFallback() map[provider.Kind][]provider.ModelInfo {
 	return out
 }
 
-// RefreshPricing 从所有已接入渠道拉取最新定价并更新缓存。
-// 并发调用会被丢弃（已有一次在跑）——启动刷新与面板「刷新」可能重叠。
-func (a *App) RefreshPricing() {
+// RefreshPricing 手动刷新入口：强制重新拉取全部账号的目录与倍率。
+func (a *App) RefreshPricing() { a.RefreshCatalog(true) }
+
+// RefreshCatalog 按账号刷新模型目录与倍率，写入账号作用域缓存。
+// force=true 忽略新鲜期（面板手动刷新）；false 时仅补拉过期/从未成功的项。
+// 不使用 Pool.Pick：查询结果不应受路由冷却、惩罚或粘性选号影响。
+func (a *App) RefreshCatalog(force bool) {
 	a.pricingMu.Lock()
 	if a.pricingBusy {
 		a.pricingMu.Unlock()
@@ -4662,73 +4775,139 @@ func (a *App) RefreshPricing() {
 		a.pricingMu.Unlock()
 	}()
 
-	allPricing := make([]provider.ModelPricing, 0)
-	var errs []string
-
+	type job struct {
+		rt       *Runtime
+		uid      string
+		au       *auth.Auth
+		nickname string
+	}
+	var jobs []job
 	for _, rt := range a.runtimesSnapshot() {
-		// 旧 Qoder 渠道已从界面下线：不再自动刷新其模型/费率（也避免无谓的 token refresh 报错日志）
-		if rt == nil || rt.Pool == nil || rt.Upstream == nil || rt.Kind == provider.Qoder || len(rt.Pool.List()) == 0 {
+		// 旧 Qoder 已下线；无账号的公共目录渠道没有可查询的凭据。
+		if rt == nil || rt.Pool == nil || rt.Upstream == nil || rt.Kind == provider.Qoder {
 			continue
 		}
-		// 拉费率与具体模型无关，故不排除任何模型级冷却（model 传空）。
-		acct := rt.Pool.Pick("")
-		if acct == nil {
-			continue
-		}
-		// 先确保 token 有效。走单飞：与请求路径/credit 循环并发，同账号并发刷新会互相作废 refresh_token。
-		if acct.NeedsRefresh(10 * time.Minute) {
-			if err := provider.RefreshOnce(acct, func() error {
-				if !acct.NeedsRefresh(10 * time.Minute) {
-					return nil // 已被并发的另一次刷新刷过
-				}
-				if rerr := rt.Upstream.RefreshToken(acct); rerr != nil {
-					return rerr
-				}
-				// 必须落盘：refresh token 会轮换，不写回则下次启动用的是旧 refresh token，
-				// 而旧 access token 已被上游作废 → 本地 expiresAt 仍显示有效 → 卡死在 401。
-				if serr := acct.SaveAtomic(); serr != nil {
-					log.Printf("pricing token save failed platform=%s uid=%s err=%v", rt.Kind, acct.UID, serr)
-				}
-				return nil
-			}); err != nil {
-				errs = append(errs, fmt.Sprintf("%s: token refresh failed", rt.Kind))
+		for _, st := range rt.Pool.List() {
+			if st.Disabled {
 				continue
 			}
-		}
-		pricing, err := rt.Upstream.FetchModelPricing(acct)
-		if err != nil {
-			// 401 同样先刷新再重试一次，避免费率因过期 token 长期拉不到。
-			if a.refreshIfSessionDead(rt, acct, err) {
-				pricing, err = rt.Upstream.FetchModelPricing(acct)
+			au := rt.Pool.AuthByUID(st.UID)
+			if au == nil {
+				continue
 			}
+			jobs = append(jobs, job{rt: rt, uid: st.UID, au: au, nickname: st.Nickname})
 		}
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %s", rt.Kind, shortErr(err)))
-			log.Printf("pricing fetch failed platform=%s err=%v", rt.Kind, err)
-			continue
-		}
-		allPricing = append(allPricing, pricing...)
-		log.Printf("pricing fetched platform=%s count=%d", rt.Kind, len(pricing))
 	}
 
-	// 排序：按渠道 + 倍率
-	sort.Slice(allPricing, func(i, j int) bool {
-		if allPricing[i].Channel != allPricing[j].Channel {
-			return allPricing[i].Channel < allPricing[j].Channel
-		}
-		return allPricing[i].Rate < allPricing[j].Rate
-	})
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, catalogWorkers)
+	var mu sync.Mutex
+	var errs []string
+	for _, j := range jobs {
+		wg.Add(1)
+		go func(j job) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("catalog refresh panic platform=%s uid=%s err=%v", j.rt.Kind, j.uid, r)
+				}
+			}()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if msg := a.refreshCatalogAccount(j.rt, j.uid, j.au, j.nickname, force); msg != "" {
+				mu.Lock()
+				errs = append(errs, msg)
+				mu.Unlock()
+			}
+		}(j)
+	}
+	wg.Wait()
+	if err := a.catalog.save(); err != nil {
+		log.Printf("catalog cache save failed: %v", err)
+	}
 
+	sort.Strings(errs)
 	a.pricingMu.Lock()
-	a.pricingCache = allPricing
-	a.pricingFetched = time.Now()
 	if len(errs) > 0 {
 		a.pricingErr = strings.Join(errs, "; ")
 	} else {
 		a.pricingErr = ""
 	}
 	a.pricingMu.Unlock()
-	a.savePricingCache()
+}
+
+// refreshCatalogAccount 刷新单个账号的目录与倍率；返回非空摘要表示本轮失败。
+// 失败只更新该账号的错误与尝试时间，保留上次成功结果，不影响其他账号。
+func (a *App) refreshCatalogAccount(rt *Runtime, uid string, au *auth.Auth, nickname string, force bool) string {
+	now := time.Now()
+	sc, _ := a.catalog.get(rt.Kind.String(), uid)
+	sc.Channel = rt.Kind.String()
+	sc.UID = uid
+	sc.Nickname = nickname
+
+	// 先确保 token 有效：与额度循环/其他查询并发时靠单飞避免重复消费 refresh token。
+	if au.NeedsRefresh(10 * time.Minute) {
+		if err := provider.RefreshOnce(au, func() error {
+			if !au.NeedsRefresh(10 * time.Minute) {
+				return nil
+			}
+			if rerr := rt.Upstream.RefreshToken(au); rerr != nil {
+				return rerr
+			}
+			// refresh token 会轮换，必须落盘；保存失败要可见。
+			return au.SaveAtomic()
+		}); err != nil {
+			log.Printf("catalog token refresh failed platform=%s uid=%s err=%v", rt.Kind, uid, err)
+		}
+	}
+
+	failures := make([]string, 0, 2)
+
+	if force || (!fresh(sc.ModelsStatus, now, catalogTTL) && !retryBlocked(sc.ModelsStatus, now)) {
+		sc.ModelsStatus.LastAttemptAt = now.Unix()
+		infos, err := rt.Upstream.FetchModels(au)
+		if err != nil && a.refreshIfSessionDead(rt, au, err) {
+			infos, err = rt.Upstream.FetchModels(au)
+		}
+		switch {
+		case err != nil:
+			sc.ModelsStatus.LastError = shortErr(err)
+			if len(sc.Models) == 0 && len(rt.StaticModels) > 0 {
+				sc.Models = append([]provider.ModelInfo(nil), rt.StaticModels...)
+				sc.ModelsStatus.Source = "static"
+			}
+			failures = append(failures, fmt.Sprintf("%s: models %s", rt.Kind, sc.ModelsStatus.LastError))
+			log.Printf("catalog models failed platform=%s uid=%s err=%v", rt.Kind, uid, err)
+		case len(infos) == 0:
+			sc.ModelsStatus.LastError = "上游未返回模型列表"
+			if len(sc.Models) == 0 && len(rt.StaticModels) > 0 {
+				sc.Models = append([]provider.ModelInfo(nil), rt.StaticModels...)
+				sc.ModelsStatus.Source = "static"
+			}
+		default:
+			sc.Models = infos
+			sc.ModelsStatus = QueryStatus{LastSuccessAt: now.Unix(), LastAttemptAt: now.Unix(), Source: "api"}
+		}
+	}
+
+	if force || (!fresh(sc.PricingStatus, now, catalogTTL) && !retryBlocked(sc.PricingStatus, now)) {
+		sc.PricingStatus.LastAttemptAt = now.Unix()
+		pricing, err := rt.Upstream.FetchModelPricing(au)
+		if err != nil && a.refreshIfSessionDead(rt, au, err) {
+			pricing, err = rt.Upstream.FetchModelPricing(au)
+		}
+		if err != nil {
+			sc.PricingStatus.LastError = shortErr(err)
+			failures = append(failures, fmt.Sprintf("%s: pricing %s", rt.Kind, sc.PricingStatus.LastError))
+			log.Printf("catalog pricing failed platform=%s uid=%s err=%v", rt.Kind, uid, err)
+		} else {
+			sc.Pricing = pricing
+			sc.PricingStatus = QueryStatus{LastSuccessAt: now.Unix(), LastAttemptAt: now.Unix(), Source: "api"}
+		}
+	}
+
+	a.catalog.put(sc)
+	return strings.Join(failures, "; ")
 }
 
 // loadPricingCache 从文件加载定价缓存。

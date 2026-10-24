@@ -8,6 +8,7 @@ cmd/wild-work/icon.ico
 .gotmp/
 
 # 运行时数据（含敏感凭据）
+wild-view-data/
 data/
 auths/
 config.json

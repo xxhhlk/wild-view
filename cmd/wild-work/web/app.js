@@ -730,16 +730,48 @@ function renderFees(fees) {
     return parts.join("\n");
   };
 
-  // 单行倍率单元格
+  // 单行倍率单元格。同一模型在不同账号上倍率不同时，额外展开「按账号」明细：
+  // 渠道级数值只是某一账号的结果，不能代表全部账号。
+  const fmtRate = (r) => {
+    if (!r || !r.priced) return "unknown";
+    return r.free ? "Free" : `x${r.rate.toFixed(2)}`;
+  };
   const rateCell = (m) => {
     if (!m) return "";
+    let base;
     if (!m.priced) {
-      return `<span class="rate-unknown" title="${esc(UNKNOWN_TIP)}">unknown</span>`;
+      base = `<span class="rate-unknown" title="${esc(UNKNOWN_TIP)}">unknown</span>`;
+    } else if (m.free) {
+      base = `<span class="rate-free" title="上游标注为免费（x0.00）">✦ Free</span>`;
+    } else {
+      base = `<span class="rate-paid">x${m.rate.toFixed(2)}</span>`;
     }
-    if (m.free) {
-      return `<span class="rate-free" title="上游标注为免费（x0.00）">✦ Free</span>`;
-    }
-    return `<span class="rate-paid">x${m.rate.toFixed(2)}</span>`;
+    const rates = m.rates || [];
+    if (rates.length < 2) return base;
+    const distinct = new Set(rates.map((r) => fmtRate(r))).size > 1;
+    if (!distinct) return base;
+    const detail = rates.map((r) => `${r.nickname || r.uid}: ${fmtRate(r)}`).join(" · ");
+    return `${base}<div class="rate-acct-list" title="同一模型在各账号上的倍率不同">${esc(detail)}</div>`;
+  };
+
+  // 账号查询状态条：每个账号单独标注已同步 / 待刷新 / 失败及最近成功时间。
+  const acctStrip = (ch) => {
+    const list = ch.accounts || [];
+    if (!list.length) return "";
+    return `<div class="fees-accts">` + list.map((a) => {
+      const st = a.pricing_status || {};
+      const label = a.nickname || a.uid;
+      const mark = st.last_error ? "失败" : (st.stale ? "待刷新" : "已同步");
+      const cls = st.last_error ? "acct-bad" : (st.stale ? "acct-stale" : "acct-ok");
+      const tip = [
+        `账号：${label}`,
+        `模型 ${a.models} 个，其中有倍率 ${a.priced} 个`,
+        st.last_success_at ? `最近成功：${st.last_success_at}` : "尚未成功查询",
+        st.last_error ? `最近错误：${st.last_error}` : "",
+        st.source ? `数据来源：${st.source}` : "",
+      ].filter(Boolean).join(String.fromCharCode(10));
+      return `<span class="fees-acct ${cls}" title="${esc(tip)}">${esc(label)} · ${mark}</span>`;
+    }).join("") + `</div>`;
   };
 
   // 促销标签：使用上游给的颜色（原本被拼在文案里没解析）
@@ -772,6 +804,7 @@ function renderFees(fees) {
     const models = ch.models || [];
     const hidden = ch.channel !== active ? ' class="hidden"' : '';
     html += `<div class="fees-panel${hidden ? ' hidden' : ''}" data-feepanel="${esc(ch.channel)}">`;
+    html += acctStrip(ch);
     html += `<table><thead><tr><th>模型</th><th>倍率</th><th>模型</th><th>倍率</th></tr></thead><tbody>`;
     for (let i = 0; i < models.length; i += 2) {
       const m1 = models[i];

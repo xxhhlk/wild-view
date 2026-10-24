@@ -686,6 +686,16 @@ func main() {
 	for k, rt := range initCustomAppRts {
 		appRuntimes[k] = rt
 	}
+	// 查看器按账号刷新目录/倍率：静态兜底表随 Runtime 一起交给 app，
+	// 上游目录不可用时仍能展示已知模型。
+	for k, art := range appRuntimes {
+		if srt, ok := runtimes[k]; ok && len(art.StaticModels) == 0 {
+			art.StaticModels = srt.StaticModels
+		}
+		if srt, ok := initCustomServerRts[k]; ok && len(art.StaticModels) == 0 {
+			art.StaticModels = srt.StaticModels
+		}
+	}
 
 	appInst, err := app.New(app.Options{
 		ConfigPath: cfgPath,
@@ -1015,6 +1025,12 @@ func workDir() string {
 				return p
 			}
 		}
+	}
+	// 默认落在可执行文件旁的独立子目录：与 wild-work 的 config.json / auths / data
+	// 不重名，两个程序可并存且不会互相覆盖凭据。
+	p := filepath.Join(dir, "wild-view-data")
+	if err := os.MkdirAll(p, 0o755); err == nil {
+		return p
 	}
 	return dir
 }
