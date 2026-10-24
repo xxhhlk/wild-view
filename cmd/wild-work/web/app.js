@@ -1389,23 +1389,12 @@ async function toggleAutostart() {
 }
 
 // ---------- 设置弹层（统一配置：监听/API-Key/签到/自启/模型路由/备用上游通道） ----------
-// renderBackupProxy 回显「备用上游通道」（决议 R57）。
 //
 // 它取代了旧的「每渠道上游代理」（cfg.proxies，整份替换、漏登记渠道即静默清空）：
 // 现在只有一个**全局**地址，且默认不参与任何请求——全部渠道照常直连，只有渠道自己
 // 判定「这次请求被上游按地区拒绝」时才在同一次请求内取用它重放一次
 // （当前取用方：cline 区域限制模型、oczen RegionError，见 internal/backuplink）。
 // 后端启动时会把旧配置里的 proxies 段一次性迁移到本字段，故前端不必再兼容旧形态。
-function renderBackupProxy() {
-  $("backupProxyInput").value = state.backup_proxy || "";
-  $("backupProxyState").textContent = state.backup_proxy_active
-    ? "已启用：仅在上游按地区拒绝时按需取用，常规请求仍直连。"
-    : "未启用：所有请求直连，上游地区拒绝将原样透传给客户端。";
-  $("backupProxyErr").textContent = "";
-}
-
-// selectedHost 当前下拉框（+自定义输入）选定的监听主机名。
-// 与后端 config.Listen 归一化口径保持一致：空/`::` 等通配写法按「全部网卡」看待（即对外暴露）。
 function selectedHost() {
   const v = $("selHost").value;
   if (v !== "__custom__") return v;
@@ -1440,31 +1429,11 @@ function openSettings() {
   } else {
     $("customHostRow").classList.add("hidden");
   }
-  // API-Key
-  $("keyInput").value = state.api_key;
-  // 管理密码：后端不回显，只提示是否已设置（留空 = 不改动，与 oczen key 同一「未改动」约定）
+  // 管理密码：后端不回显，只提示是否已设置（留空 = 不改动）
   $("adminPassInput").value = "";
   $("adminPassInput").placeholder = state.admin_pass_set
     ? "已设置（留空 = 不改动；填入新值 = 修改）"
     : (state.auth_required ? "必填：监听非 127.0.0.1 时面板必须鉴权" : "留空 = 面板不鉴权（仅本机监听时允许）");
-  // 模型路由
-  const cc = state.compat || {};
-  const channels = cc.channels || [];
-  $("selCh").innerHTML = channels.map(c => `<option value="${c}">${c}</option>`).join("");
-  $("selCh").value = cc.default_channel || (channels[0] || "");
-  $("inMaxTok").value = cc.max_tokens_cap || 0;
-  const map = cc.model_map || {};
-  const entries = Object.entries(map);
-  $("mapSummary").textContent = entries.length === 0 ? "（空）" : entries.map(([k,v]) => `${k} → ${v}`).join("\u00A0 \u00A0");
-  // 映射编辑器：随对话框打开而重置为当前值，收起
-  $("mapText").value = entries.map(([k,v]) => `${k} = ${v}`).join("\n");
-  $("mapEditor").classList.add("hidden");
-  $("mapErr").textContent = "";
-  renderMapPresets(channels);
-  // 备用上游通道 + oczen 自定义 key
-  renderBackupProxy();
-  $("oczenKeyInput").value = state.oczen_api_key || ""; // 回显脱敏值；未改动则原样回传，后端按脱敏值识别为「未变」
-  $("oczenKeyInput").dataset.touched = "";
   // 纯签到 + 开机自启 + 临期阈值
   $("chkCheckinEnabled").checked = !!state.checkin_enabled;
   $("chkAutostart").checked = !!state.autostart;
@@ -1478,61 +1447,16 @@ function closeSettings() {
   $("settingsOverlay").classList.add("hidden");
 }
 
-// validateBackupProxy 校验备用上游通道地址，返回 [值, 错误]。空串合法（= 关闭）。
 // 判据与后端 backuplink.Parse 同口径：http/https/socks5 + 必须有 host。
-function validateBackupProxy() {
-  const v = $("backupProxyInput").value.trim();
-  if (!v) return ["", ""];
-  let u;
-  try { u = new URL(v); } catch { return [null, `备用通道地址无效：${v}`]; }
-  if (!["http:", "https:", "socks5:"].includes(u.protocol)) {
-    return [null, `备用通道协议不支持（仅 http/https/socks5）：${v}`];
-  }
-  if (!u.hostname) return [null, `备用通道缺少主机名：${v}`];
-  return [v, ""];
-}
-
-// testOczenKey 「测试」按钮：用输入框当前的候选 key（含脱敏值/空）调后端实测。
-// 后端逻辑：候选 key 临时写入渠道 client → big-pickle 发最小对话 → 200/429 均算通过
-// （200 = 配额正常；429 = 连通但匿名共享配额限流，属预期现象）；测试后恢复配置原值。
-async function testOczenKey() {
-  const btn = $("btnOczenTest");
-  if (btn.disabled) return;
-  btn.disabled = true;
-  const old = btn.textContent;
-  btn.textContent = "测试中…";
-  $("backupProxyErr").textContent = "";
-  try {
-    let k = $("oczenKeyInput").value.trim();
-    if (k.includes("…")) k = ""; // 脱敏形态 = 未改动，用当前配置值测
-    const r = await api("/api/config/oczen_test", { api_key: k });
-    if (r.ok) {
-      toast(r.status === 200 ? "✓ OpenCodeZen 凭证可用（200）" : "✓ 连通正常（429 匿名限流，属预期）");
-    } else {
-      const brief = (r.body || r.error || "").slice(0, 90).replace(/\s+/g, " ");
-      toast(`✗ 测试失败 HTTP ${r.status}：${brief}`);
-    }
-  } catch (e) {
-    toast("✗ 测试失败：" + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
 async function saveSettings() {
-  // 1) 监听地址 + 管理密码（同请求提交：后端先存密码再切监听）
-  let host = $("selHost").value;
-  if (host === "__custom__") host = $("inHost").value.trim() || "127.0.0.1";
-  const port = parseInt($("inPort").value, 10);
+  // 1) 监听地址 + 管理密码（保存即热切换；改密码会使旧会话失效）
+  const body = { host: selectedHost(), port: parseInt($("inPort").value, 10) || 0 };
   const adminPass = $("adminPassInput").value.trim();
-  const listenBody = { host, port };
-  if (adminPass) listenBody.admin_password = adminPass; // 空 = 不改动，避免覆盖已设密码
+  if (adminPass) body.admin_password = adminPass; // 空 = 不改动，避免覆盖已设密码
   try {
-    await api("/api/config/listen", listenBody);
+    await api("/api/config/listen", body);
   } catch (e) { toast(e.message); return; }
   // 刚设置/修改密码：旧会话已被作废，立即用新密码重新登录，保证本次保存的后续步骤可用。
-  // （从「本机监听 + 无密码」切到 0.0.0.0 时鉴权刚启用，此前根本没有 cookie。）
   if (adminPass) {
     try {
       const r = await api("/api/auth/login", { password: adminPass });
@@ -1540,35 +1464,7 @@ async function saveSettings() {
     } catch (e) { toast(e.message); closeSettings(); showLogin("管理密码已变更，请重新登录"); return; }
   }
 
-  // 2) 备用上游通道（先本地校验，失败阻断保存）+ oczen key（仅在用户改动过时提交，避免把脱敏回显值存回）
-  const [backupProxy, perr] = validateBackupProxy();
-  if (perr) { $("backupProxyErr").textContent = perr; toast(perr); return; }
-  const body = { proxy: backupProxy };
-  const kIn = $("oczenKeyInput");
-  if (kIn.dataset.touched === "1") {
-    let k = kIn.value.trim();
-    // 值仍是脱敏形态（含 …）则视为未修改，保持服务端现值
-    if (k && k.includes("…")) k = undefined;
-    if (k !== undefined) body.oczen_api_key = k; // undefined 时不携带字段 = 不改动；空串 = 清除回匿名
-  }
-  try {
-    await api("/api/config/proxy", body);
-  } catch (e) { toast(e.message); return; }
-
-  // 3) 模型映射：优先读编辑器；编辑器从未展开过则用原值（保证「只改监听/渠道不碰映射」）
-  let modelMap = state.compat?.model_map || {};
-  if (!$("mapEditor").classList.contains("hidden")) {
-    const [parsed, err] = parseMapText($("mapText").value);
-    if (err) { $("mapErr").textContent = err; toast(err); return; }
-    modelMap = parsed;
-  }
-  const defaultChannel = $("selCh").value;
-  const maxTokensCap = parseInt($("inMaxTok").value, 10) || 0;
-  try {
-    await api("/api/config/compat", { default_channel: defaultChannel, max_tokens_cap: maxTokensCap, model_map: modelMap });
-  } catch (e) { toast(e.message); return; }
-
-  // 4) 临期阈值（1/2/3 天，独立端点即时生效）
+  // 2) 临期阈值（1/2/3 天，独立端点即时生效）
   const expDays = parseInt($("selExpiring").value, 10) || 1;
   if (expDays !== (state.expiring_days || 1)) {
     try {
@@ -1576,18 +1472,11 @@ async function saveSettings() {
     } catch (e) { toast(e.message); return; }
   }
 
-  // 5) API-Key（最后保存：改 Key 可能影响当前会话的后续请求）
-  try {
-    await api("/api/config/api_key", { key: $("keyInput").value.trim() });
-  } catch (e) { toast(e.message); return; }
-
-  // 6) 密码已在第 1 步生效（会话已换新），无需再强制重登
   toast(adminPass ? "设置已保存，管理密码已生效" : "设置已保存");
   closeSettings();
   loadState();
 }
 
-// clearAdminPassword 「清除」按钮：关闭面板鉴权（仅环回监听允许，后端会校验）。
 async function clearAdminPassword() {
   if (!confirm("确定清除管理密码？清除后面板将不再鉴权（仅允许监听 127.0.0.1）。")) return;
   try {
@@ -1645,61 +1534,7 @@ const CHANNEL_PRESETS = {
   oczen:       { label: "→ oczen (匿名免费)",        items: ["claude-* = oczen/mimo-v2.6-flash-free", "gpt-* = oczen/big-pickle"] },
 };
 
-// renderMapPresets 按当前已接入渠道渲染缺省建议按钮。
 // 仅列出「已接入（有账号）」的渠道——未绑定的渠道点了也会因无账号而失败，不给误导性入口。
-function renderMapPresets(channels) {
-  const bound = new Set((state.accounts || []).map(a => a.group));
-  // TraeCode 与 TraeWork 共用账号，账号列表里只会出现 traework；
-  // 但 TraeCode 是可独立路由的渠道，其预设也应可见。
-  if (bound.has("traework")) bound.add("traecode");
-  const box = $("mapPresets");
-  box.innerHTML = channels.filter(c => CHANNEL_PRESETS[c] && bound.has(c)).map(c => {
-    const p = CHANNEL_PRESETS[c];
-    return `<span class="btn tiny preset" data-ch="${c}" title="${esc(p.items.join("\n"))}">${esc(p.label)}</span>`;
-  }).join(" ") || `<span class="hint">（尚未接入任何渠道，先在账号管理添加账号）</span>`;
-  box.querySelectorAll(".preset").forEach(b => {
-    b.onclick = () => {
-      const p = CHANNEL_PRESETS[b.dataset.ch];
-      // 追加尚未存在的行，避免重复插入
-      const cur = $("mapText").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const have = new Set(cur.map(l => l.split("=")[0].trim()));
-      const add = p.items.filter(it => !have.has(it.split("=")[0].trim()));
-      if (!add.length) { toast(`${p.label} 的建议映射已存在`); return; }
-      $("mapText").value = cur.concat(add).join("\n");
-    };
-  });
-}
-
-// toggleMapEditor 展开/收起映射编辑器。
-function toggleMapEditor() {
-  $("mapEditor").classList.toggle("hidden");
-}
-
-// parseMapText 校验编辑器内容，返回 (modelMap, 错误信息)。
-// 语法错误就地提示并阻断保存，不再弹 prompt 循环。
-function parseMapText(raw) {
-  const map = {};
-  const channels = new Set(state.compat?.channels || []);
-  for (const line0 of raw.split(/\r?\n/)) {
-    const line = line0.trim();
-    if (!line || line.startsWith("#")) continue;
-    const idx = line.indexOf("=");
-    if (idx < 0) return [null, `格式错误（缺少 =）：${line}`];
-    const k = line.substring(0, idx).trim(), v = line.substring(idx + 1).trim();
-    if (!k || !v) return [null, `格式错误（键或值为空）：${line}`];
-    const vi = v.indexOf("/");
-    if (vi <= 0 || !v.substring(vi + 1).trim()) return [null, `映射目标必须是「渠道/模型」形式：${v}`];
-    const ch = v.substring(0, vi);
-    if (channels.size && !channels.has(ch)) {
-      return [null, `未知渠道「${ch}」；已知渠道：${[...channels].join(", ")}`];
-    }
-    if (map[k] !== undefined) return [null, `重复的键：${k}`];
-    map[k] = v;
-  }
-  return [map, ""];
-}
-
-// ---------- 复制到剪贴板 ----------
 async function copyText(text, label) {
   try {
     await navigator.clipboard.writeText(text);
@@ -1721,19 +1556,7 @@ async function copyText(text, label) {
     document.body.removeChild(ta);
   }
 }
-// renderHelpPrefixes 按后端已注册渠道清单动态生成前缀表。
-// 原帮助文案手写了 4 个渠道且含已下线的 qoder —— 手写清单必然随渠道增加而滞后，
-// 故改为与路由报错文案（server.prefixHint）同源：都取 cfg.Runtimes 的 key（state.compat.channels）。
-function renderHelpPrefixes() {
-  const box = $("helpPrefixes");
-  if (!box) return;
-  const channels = (state && state.compat && state.compat.channels) || [];
-  // 旧 Qoder（qoder/*）已从界面下线：路由仍可用，但不做引导，只补一句说明。
-  const live = channels.filter((c) => c !== "qoder");
-  box.innerHTML = live.map((c) => chPrefixChip(c)).join(" ") +
-    (channels.includes("qoder") ? ' <span class="hint">（旧 qoder/&lt;model&gt; 仍可用，已从界面下线）</span>' : "");
-}
-function openHelp() { renderHelpPrefixes(); $("helpOverlay").classList.remove("hidden"); }
+function openHelp() { $("helpOverlay").classList.remove("hidden"); }
 function closeHelp() { $("helpOverlay").classList.add("hidden"); }
 function openAbout() { $("aboutOverlay").classList.remove("hidden"); }
 function closeAbout() { $("aboutOverlay").classList.add("hidden"); }
@@ -1826,22 +1649,18 @@ function bind() {
   // 统一设置弹层
   $("btnSettingsSave").onclick = saveSettings;
   $("btnSettingsCancel").onclick = closeSettings;
-  $("btnCompatMap").onclick = toggleMapEditor;
   $("selHost").onchange = () => {
     $("customHostRow").classList.toggle("hidden", $("selHost").value !== "__custom__");
     syncListenRisk(); // 监听地址变化 → 实时间同步警告条与必填星号
   };
   // 自定义主机名边输边判（可能一开始就填着非本机地址）
   $("inHost").addEventListener("input", syncListenRisk);
-  $("keyInput").addEventListener("keydown", (e) => { if (e.key === "Enter") saveSettings(); });
 
   // 显示名修改弹层
   $("btnRenameSave").onclick = saveRename;
   $("btnRenameCancel").onclick = closeRename;
   $("rnInput").addEventListener("keydown", (e) => { if (e.key === "Enter") saveRename(); });
   // oczen key 用户改动标记：避免把脱敏回显值误存回
-  $("oczenKeyInput").addEventListener("input", (e) => { e.target.dataset.touched = "1"; });
-  $("btnOczenTest").onclick = testOczenKey;
 
   // 点击弹层空白处关闭
   $("settingsOverlay").onclick = (e) => { if (e.target === $("settingsOverlay")) closeSettings(); };
@@ -1880,6 +1699,7 @@ function bind() {
 let usageDays = 7;
 let usageChart = null;    // token 折线图（echarts 实例）
 let creditChart = null;   // 积分消耗折线图（echarts 实例）
+let balanceChart = null;  // 余额变化折线图（真实余额采样，echarts 实例）
 let recentAll = [];       // 全量最近流水（分页源，时间升序）
 let recentPage = 0;
 let lastNames = {};       // 最近一次渲染的 uid→昵称表（翻页时复用）
@@ -1909,6 +1729,7 @@ async function loadUsage() {
       return;
     }
     renderUsage(st);
+    loadBalance();
   } catch (e) { /* 统计加载失败不阻塞 */ }
 }
 
@@ -2013,6 +1834,49 @@ function renderUsageChart(st) {
 
 // renderCreditChart 积分消耗折线图：按日聚合各账号 spend（原始条目自算），
 // 只画消耗总量前 10 的账号；不含入项/过期。
+// 余额变化曲线：数据来自 /api/balance（每次额度查询成功后的真实余额）。
+// 与下方积分流水图并列展示，口径不同：曲线是绝对值，流水是分类增减。
+async function loadBalance() {
+  try {
+    const st = await api(`/api/balance?days=${usageDays}`);
+    renderBalanceChart(st);
+  } catch (e) { /* 曲线失败不阻塞流水 */ }
+}
+
+function renderBalanceChart(st) {
+  const box = $("balanceChart");
+  if (!box) return;
+  const series = (st && st.series) || [];
+  if ((st && st.disabled) || !series.length) {
+    box.style.display = "none";
+    if (balanceChart) { balanceChart.dispose(); balanceChart = null; }
+    return;
+  }
+  box.style.display = "";
+  balanceChart = makeChart(box, balanceChart);
+  if (!balanceChart) return;
+  const lastCredits = (s) => {
+    const pts = s.points || [];
+    return pts.length ? pts[pts.length - 1].credits : 0;
+  };
+  // 只画余额最高的 10 个账号，避免图例与折线过多。
+  const top = series.slice().sort((a, b) => lastCredits(b) - lastCredits(a)).slice(0, 10);
+  const data = top.map((s) => ({
+    name: `${chLabel(s.channel)} ${s.nickname || shortUid(s.uid)}`,
+    type: "line", smooth: true, showSymbol: false,
+    data: (s.points || []).map((p) => [p.ts * 1000, p.credits]),
+  }));
+  balanceChart.setOption({
+    tooltip: { trigger: "axis", valueFormatter: (v) => fmtCredits(v) },
+    legend: { type: "scroll", data: data.map((s) => s.name) },
+    grid: { left: 56, right: 20, top: 36, bottom: 28 },
+    xAxis: { type: "time", axisLabel: { formatter: (v) => fmtDay(Math.floor(v / 1000)) } },
+    yAxis: { type: "value", scale: true, axisLabel: { formatter: (v) => fmtCredits(v) } },
+    series: data,
+  }, true);
+  balanceChart.resize();
+}
+
 function renderCreditChart(entries, names) {
   const box = $("creditChart");
   const spends = entries.filter((e) => e.kind === "spend");

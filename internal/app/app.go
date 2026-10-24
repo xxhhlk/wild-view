@@ -2188,6 +2188,10 @@ func (a *App) creditTotals(rt *Runtime, au *auth.Auth) (usable, expiring, unusab
 	}
 	// 运行统计：账号最近临期喂入（复用同一响应的 items，免二次上游调用）
 	a.applyExpiryFromItems(au.UID, items)
+	// 余额采样：只在积分口径的渠道记录，避免把 Token 计数混进积分曲线。
+	if a.ledger != nil && a.creditsUnit(rt.Kind.String()) != "token" {
+		a.ledger.RecordBalance(rt.Kind.String(), au.UID, remain)
+	}
 	return remain, expiring, unusable, nil
 }
 
@@ -4269,6 +4273,31 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/fees/refresh", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.FeesInfo())
 		go a.safeGo(func() { a.RefreshPricing() })
+	})
+	// 余额变化曲线：真实余额采样（不是积分流水差分）。
+	mux.HandleFunc("GET /api/balance", func(w http.ResponseWriter, r *http.Request) {
+		if a.ledger == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"disabled": true})
+			return
+		}
+		days := 7
+		if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 && d <= 31 {
+			days = d
+		}
+		series := a.ledger.BalanceSeries(days)
+		// 昵称在响应时补全：改名不会污染历史采样。
+		for i := range series {
+			if rt := a.runtime(provider.Kind(series[i].Channel)); rt != nil && rt.Pool != nil {
+				if au := rt.Pool.AuthByUID(series[i].UID); au != nil {
+					series[i].Nickname = au.Nickname
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"days":   days,
+			"series": series,
+			"note":   "余额为每次查询成功时的实际值；下降可能来自消耗、到期或套餐回收。",
+		})
 	})
 	mux.HandleFunc("GET /api/usage", func(w http.ResponseWriter, r *http.Request) {
 		if a.ledger == nil {
