@@ -351,38 +351,27 @@ func main() {
 	// 非流式调用；流式兜底改由 IdleTimeout（空闲看门狗）承担。理由见 config.StreamIdleSeconds。
 	wbUp := upstream.New()
 	wbUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	wbUp.IdleTimeout = cfg.StreamIdleDur
 	trUp := traework.New()
 	trUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	trUp.IdleTimeout = cfg.StreamIdleDur
 	// TraeCode（代码版）：与 TraeWork 同一上游、共用账号，仅 function 不同（solo_agent）。
 	trCodeUp := traework.NewTraeCode()
 	trCodeUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	trCodeUp.IdleTimeout = cfg.StreamIdleDur
 	qdUp := qoder.New()
 	qdUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	qdUp.IdleTimeout = cfg.StreamIdleDur
 	wbaUp := workbuddyai.New()
 	wbaUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	wbaUp.IdleTimeout = cfg.StreamIdleDur
 	qwUp := qwenwork.New()
 	qwUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	qwUp.IdleTimeout = cfg.StreamIdleDur
 	qcnUp := qodercn.New()
 	qcnUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	qcnUp.IdleTimeout = cfg.StreamIdleDur
 	qcmUp := qodercom.New()
 	qcmUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	qcmUp.IdleTimeout = cfg.StreamIdleDur
 	// 等响应头上限由 NewWithTimeout 统一算（≥180s，R118）；总超时仍取 upstream.timeout_seconds。
 	rcUp := raccoon.NewWithTimeout(time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second)
-	rcUp.IdleTimeout = cfg.StreamIdleDur
 	lmUp := loomy.New()
 	lmUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	lmUp.IdleTimeout = cfg.StreamIdleDur
 	mcUp := monkeycode.New()
 	mcUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	mcUp.IdleTimeout = cfg.StreamIdleDur
 	clUp := cline.New()
 	// Cline：非流式 client 保留总超时（一问一答需要兜底）；StreamHTTP **不得**设 Timeout
 	// ——R35：Client.Timeout 覆盖整个生命周期（含读 body），SSE 整个生成期都在读 body，

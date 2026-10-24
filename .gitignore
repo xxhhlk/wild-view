@@ -27,16 +27,9 @@ ref/
 #   - 抓包产物原文、真实账号标识（uid/昵称/邮箱/机器指纹/内网 IP/本机用户名）
 #   - 客户端插桩/中间人取数方法
 docs/*
-!docs/qoder2api端点覆盖度对比.md
 !docs/qoderCN渠道接入备忘.md
-!docs/三端点四能力矩阵.md
 !docs/用量积分流水记账备忘.md
-!docs/GitHub直连下载与加速代理调研备忘.md
-!docs/三接口兼容改造备忘.md
-!docs/决议项.md
 !docs/渠道接入备忘.md
-!docs/接口参考.md
-!docs/模型降级链定义.md
 !docs/全渠道登录授权方式梳理.md
 !docs/渠道配色规范.md
 

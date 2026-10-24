@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -251,7 +250,7 @@ func TestBuildFeesChannels(t *testing.T) {
 		{Channel: "workbuddyai", Model: "ghost-model", Rate: 9.99},
 	}
 
-	got := buildFeesChannels(models, pricing, []provider.Kind{provider.WorkBuddyAI}, nil)
+	got := buildFeesChannels(models, pricing, []provider.Kind{provider.WorkBuddyAI})
 	if len(got) != 1 {
 		t.Fatalf("want 1 channel, got %d", len(got))
 	}
@@ -328,7 +327,7 @@ func TestBuildFeesChannelsHandMeasured(t *testing.T) {
 			{ID: "cline-free/unknown-new", ContextWindow: 0}, // 无实测数据
 		},
 	}
-	got := buildFeesChannels(models, nil, []provider.Kind{provider.Cline}, nil)
+	got := buildFeesChannels(models, nil, []provider.Kind{provider.Cline})
 	if len(got) != 1 {
 		t.Fatalf("want 1 channel, got %d", len(got))
 	}
@@ -352,7 +351,7 @@ func TestBuildFeesChannelsNoPricing(t *testing.T) {
 	models := map[provider.Kind][]provider.ModelInfo{
 		provider.TraeWork: {{ID: "glm-5.2"}, {ID: "kimi-k2.7"}},
 	}
-	got := buildFeesChannels(models, nil, []provider.Kind{provider.TraeWork}, nil)
+	got := buildFeesChannels(models, nil, []provider.Kind{provider.TraeWork})
 	if len(got) != 1 || len(got[0].Models) != 2 {
 		t.Fatalf("模型不应因缺费率而消失: %+v", got)
 	}
@@ -376,7 +375,7 @@ func TestBuildFeesChannelsAbsentCreditsIsNotFree(t *testing.T) {
 		{Channel: "workbuddy", Model: "hy4-preview", Rate: 0, Note: "Free now", Explicit: &explicitTrue}, // 显式 x0.00
 		{Channel: "workbuddy", Model: "glm-5.2", Rate: 0.79, Explicit: &explicitTrue},
 	}
-	rows := buildFeesChannels(models, pricing, []provider.Kind{provider.WorkBuddy}, nil)[0].Models
+	rows := buildFeesChannels(models, pricing, []provider.Kind{provider.WorkBuddy})[0].Models
 	byID := map[string]feesModelRow{}
 	for _, r := range rows {
 		byID[r.Model] = r
@@ -411,7 +410,7 @@ func TestBuildFeesChannelsContextFlag(t *testing.T) {
 			{ID: "deepseek-v4.1-flash", ContextWindow: 1000000, MaxTokens: 128000, ContextFromAPI: false},
 		},
 	}
-	rows := buildFeesChannels(models, nil, []provider.Kind{provider.WorkBuddyAI}, nil)[0].Models
+	rows := buildFeesChannels(models, nil, []provider.Kind{provider.WorkBuddyAI})[0].Models
 	byID := map[string]feesModelRow{}
 	for _, r := range rows {
 		byID[r.Model] = r
@@ -438,7 +437,7 @@ func TestBuildFeesChannelsEfforts(t *testing.T) {
 				SupportedEfforts: []string{"low", "high"}},
 		},
 	}
-	channels := buildFeesChannels(models, nil, []provider.Kind{provider.QoderCN, provider.TraeWork}, nil)
+	channels := buildFeesChannels(models, nil, []provider.Kind{provider.QoderCN, provider.TraeWork})
 	byCh := map[string][]feesModelRow{}
 	for _, ch := range channels {
 		byCh[ch.Channel] = ch.Models
@@ -460,7 +459,7 @@ func TestBuildFeesChannelsCarriesColor(t *testing.T) {
 	pricing := []provider.ModelPricing{
 		{Channel: "workbuddy", Model: "deepseek-v4.1-flash", Rate: 0.03, Note: "独家优惠", Color: "#FF0000", Explicit: &explicitTrue},
 	}
-	rows := buildFeesChannels(models, pricing, []provider.Kind{provider.WorkBuddy}, nil)[0].Models
+	rows := buildFeesChannels(models, pricing, []provider.Kind{provider.WorkBuddy})[0].Models
 	if len(rows) != 1 {
 		t.Fatalf("want 1 row, got %d", len(rows))
 	}
@@ -557,140 +556,5 @@ func TestResourceDetailWritesBackPoolSnapshot(t *testing.T) {
 	}
 	if st, ok := p.Status("uid-rd"); !ok || st.Credits != 1234 {
 		t.Fatalf("pool 快照未回写: ok=%v credits=%d, want 1234", ok, st.Credits)
-	}
-}
-
-// TestBuildFeesChannelsContextWindows 逐模型档位随行透出：可选档位来自上游，
-// 当前选择取逐模型配置（key 与 /v1/models 的 id 同格式）。
-func TestBuildFeesChannelsContextWindows(t *testing.T) {
-	// 旧 Qoder 已从面板下线（buildFeesChannels 跳过它），用 QoderCN 代表档位渠道。
-	models := map[provider.Kind][]provider.ModelInfo{
-		provider.QoderCN: {
-			{ID: "qwen3.8-flash", ContextWindow: 1000000, ContextFromAPI: true,
-				ContextOptions: []int64{200000, 400000, 1000000}},
-			{ID: "minimax-m2.7", ContextWindow: 200000, ContextFromAPI: true,
-				ContextOptions: []int64{200000}},
-		},
-	}
-	got := buildFeesChannels(models, nil, []provider.Kind{provider.QoderCN},
-		map[string]int64{"qodercn/qwen3.8-flash": 1000000})
-	if len(got) != 1 || len(got[0].Models) != 2 {
-		t.Fatalf("want 1 channel / 2 rows, got %+v", got)
-	}
-	byID := map[string]feesModelRow{}
-	for _, r := range got[0].Models {
-		byID[r.Model] = r
-	}
-	if r := byID["qwen3.8-flash"]; r.ContextChoice != 1000000 || len(r.ContextOptions) != 3 {
-		t.Errorf("已配置模型应带当前档位与全部选项，得到 %+v", r)
-	}
-	if r := byID["minimax-m2.7"]; r.ContextChoice != 0 {
-		t.Errorf("未配置模型当前档位应为 0，得到 %+v", r)
-	}
-}
-
-// TestSetContextWindow 逐模型档位写入/清除配置，模型名需为 channel/model 形式。
-func TestSetContextWindow(t *testing.T) {
-	a, _ := newTestApp(t, provider.Qoder, &fakeUpstream{}, "uid-ctx")
-
-	if err := a.SetContextWindow("qoder/qwen3.8-flash", 1000000); err != nil {
-		t.Fatal(err)
-	}
-	if got := a.cfg.Compat.ContextWindows["qoder/qwen3.8-flash"]; got != 1000000 {
-		t.Fatalf("配置未写入，得到 %v", a.cfg.Compat.ContextWindows)
-	}
-
-	if err := a.SetContextWindow("qoder/qwen3.8-flash", 0); err != nil {
-		t.Fatal(err)
-	}
-	if _, has := a.cfg.Compat.ContextWindows["qoder/qwen3.8-flash"]; has {
-		t.Fatalf("window=0 应清除该项，得到 %v", a.cfg.Compat.ContextWindows)
-	}
-
-	if err := a.SetContextWindow("qwen3.8-flash", 1000000); err == nil {
-		t.Fatal("缺渠道前缀应报错")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// 自定义渠道（R66）与积分体系的关系：无积分概念，不得产生假失败/假 0
-// ---------------------------------------------------------------------------
-
-// TestRefreshAllSkipsCustomChannels RefreshAll 必须跳过自定义渠道：
-// 其占位账号无 access/refresh token（凭据本体是渠道级 api_key），纳入统计只会
-// 每渠道产生一条「no token」假失败，面板 toast 报「失败 N」纯噪音（issue 用户实测：
-// 4 个自定义渠道每次刷新都「失败 4」，但 32 个真实账号全部成功）。
-// 对齐 oczen 的跳过逻辑（无积分概念的渠道都不参与）。
-func TestRefreshAllSkipsCustomChannels(t *testing.T) {
-	up := &fakeUpstream{remain: 500}
-	a, _ := newTestApp(t, provider.WorkBuddyAI, up, "uid-real")
-
-	// 挂一个自定义渠道运行时：占位账号故意不带任何 token（与 main.buildCustomRuntimes 一致）
-	cp := pool.New(t.TempDir() + "/state-mychannel.json")
-	cp.Add(&auth.Auth{Kind: "mychannel", UID: "custom-mychannel", Nickname: "mychannel (自定义)", ExpiresAt: 4102444800})
-	a.UpdateCustomRuntimes(map[provider.Kind]*Runtime{
-		provider.Kind("mychannel"): {Kind: provider.Kind("mychannel"), Pool: cp, Upstream: up, Custom: true},
-	})
-
-	sum := a.RefreshAll()
-	if sum.Failed != 0 {
-		t.Errorf("自定义渠道不应计入失败：failed=%d（accounts=%v）", sum.Failed, sum.Platforms["mychannel"])
-	}
-	if sum.OK != 1 {
-		t.Errorf("真实账号应正常计入成功：ok=%d", sum.OK)
-	}
-	if _, ok := sum.Platforms["mychannel"]; ok {
-		t.Errorf("自定义渠道不应出现在汇总里")
-	}
-}
-
-// TestRefreshAllSkipsDisabledCustomChannels 变体：自定义渠道停用态（Enabled=false 时
-// buildCustomRuntimes 直接不装配，但热更新窗口内可能出现 Custom+Disabled 组合），同样不崩不进统计。
-func TestRefreshCreditsCustomChannelNA(t *testing.T) {
-	up := &fakeUpstream{remain: 500}
-	a, _ := newTestApp(t, provider.WorkBuddyAI, up, "uid-real")
-
-	cp := pool.New(t.TempDir() + "/state-mychannel.json")
-	cp.Add(&auth.Auth{Kind: "mychannel", UID: "custom-mychannel", ExpiresAt: 4102444800})
-	a.UpdateCustomRuntimes(map[provider.Kind]*Runtime{
-		provider.Kind("mychannel"): {Kind: provider.Kind("mychannel"), Pool: cp, Upstream: up, Custom: true},
-	})
-
-	// 单账号刷新必须明确报「不适用」，而不是假装成功把池内余额写成 0。
-	remain, err := a.RefreshCredits("custom-mychannel")
-	if err == nil {
-		t.Fatalf("自定义渠道单账号刷新应报「不适用」，却成功返回 remain=%d", remain)
-	}
-	if !strings.Contains(err.Error(), "不适用") {
-		t.Errorf("错误信息应说明无积分概念，得: %v", err)
-	}
-	if st, ok := cp.Status("custom-mychannel"); ok && st.Credits != 0 {
-		// 未被 creditSnapshot 污染（这里快照本就是 0，重点是没有假装成功）
-		t.Logf("pool credits=%d", st.Credits)
-	}
-
-	// 积分明细同理：报错而不是返回空 items 让前端弹空白层。
-	if _, _, _, _, err := a.ResourceDetail("custom-mychannel"); err == nil {
-		t.Error("自定义渠道积分明细应报「不适用」，却成功返回")
-	}
-}
-
-// TestCreditsNAKindCoversCustomChannels creditsNAKind 对自定义渠道返回 true
-// （/api/state 据此给 credits_na=true，前端显示「不适用」）。
-func TestCreditsNAKindCoversCustomChannels(t *testing.T) {
-	up := &fakeUpstream{remain: 1}
-	a, _ := newTestApp(t, provider.WorkBuddyAI, up, "uid-real")
-
-	cp := pool.New(t.TempDir() + "/state-mychannel.json")
-	cp.Add(&auth.Auth{Kind: "mychannel", UID: "custom-mychannel", ExpiresAt: 4102444800})
-	a.UpdateCustomRuntimes(map[provider.Kind]*Runtime{
-		provider.Kind("mychannel"): {Kind: provider.Kind("mychannel"), Pool: cp, Upstream: up, Custom: true},
-	})
-
-	if !a.creditsNAKind("mychannel") {
-		t.Error("自定义渠道应判定为积分不适用（credits_na=true）")
-	}
-	if a.creditsNAKind("workbuddyai") {
-		t.Error("内建有积分渠道不应被判定为 NA")
 	}
 }

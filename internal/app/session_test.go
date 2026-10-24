@@ -146,8 +146,8 @@ func TestPanelRequiresSession(t *testing.T) {
 	if st.AuthSession != lr.Session {
 		t.Errorf("探针 session=%q 应等于登录指纹 %q", st.AuthSession, lr.Session)
 	}
-	if st.APIKey == "" {
-		t.Error("已登录探针应等价于 /api/state（含 api_key）")
+	if st.Version == "" {
+		t.Error("已登录探针应等价于 /api/state（含 version）")
 	}
 
 	// 伪造 cookie 无效

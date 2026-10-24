@@ -1,15 +1,12 @@
 package app
 
 import (
-	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"wild-work/internal/ledger"
 	"wild-work/internal/provider"
-	statsEngine "wild-work/internal/stats"
 )
 
 // TestExpiryDayAmount 临期喂入口径：可用条目按日归组，取最早到期日 + 当日合计。
@@ -90,58 +87,6 @@ func TestFeedLedgerExpire(t *testing.T) {
 
 // TestStatsEndpoints 端点挂载与守卫：/api/stats 与 /api/stats/logs 必须过会话守卫（R4），
 // 登录后回快照 JSON / rows 形状；limit 缺省与非法值兜底。
-func TestStatsEndpoints(t *testing.T) {
-	a := newPanelApp(t, "0.0.0.0", "s3cret-pass")
-	mux := panelMux(a)
-
-	// 匿名：两个新端点都必须 401（证明挂在守卫 mux 上，而非裸 mux）
-	if w := doReq(mux, "GET", "/api/stats", "", nil); w.Code != http.StatusUnauthorized {
-		t.Fatalf("匿名 /api/stats 应 401，实际 %d", w.Code)
-	}
-	if w := doReq(mux, "GET", "/api/stats/logs", "", nil); w.Code != http.StatusUnauthorized {
-		t.Fatalf("匿名 /api/stats/logs 应 401，实际 %d", w.Code)
-	}
-
-	// 登录
-	lw := doReq(mux, "POST", "/api/auth/login", `{"password":"s3cret-pass"}`, nil)
-	ck := lw.Result().Cookies()[0]
-
-	// 快照：JSON 可解析且含面板契约字段
-	w := doReq(mux, "GET", "/api/stats", "", ck)
-	if w.Code != http.StatusOK {
-		t.Fatalf("/api/stats 应 200，实际 %d: %s", w.Code, w.Body.String())
-	}
-	var snap map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &snap); err != nil {
-		t.Fatalf("快照 JSON 解析失败: %v", err)
-	}
-	for _, key := range []string{"version", "today", "total_accounts", "token_usage", "platforms", "models", "abnormal", "rotation"} {
-		if _, ok := snap[key]; !ok {
-			t.Errorf("快照缺少面板契约字段 %q", key)
-		}
-	}
-
-	// 请求日志：rows 形状；limit 非法/缺省走默认 15（不报错）
-	var lg struct {
-		Rows []statsEngine.ReqRow `json:"rows"`
-	}
-	if w := doReq(mux, "GET", "/api/stats/logs?limit=1", "", ck); w.Code != http.StatusOK {
-		t.Fatalf("/api/stats/logs 应 200，实际 %d", w.Code)
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &lg); err != nil {
-		t.Fatalf("rows JSON 解析失败: %v", err)
-	}
-	if len(lg.Rows) != 0 {
-		t.Fatalf("初始应无请求行，实际 %d 行", len(lg.Rows))
-	}
-	if w := doReq(mux, "GET", "/api/stats/logs?limit=abc", "", ck); w.Code != http.StatusOK {
-		t.Fatalf("limit 非法应兜底默认值，实际 %d", w.Code)
-	}
-}
-
-// TestLogWriterObserveEvents 日志实时喂入：logWriter.Write 的签到事件行进引擎（事件口径收入）。
-// 日志行日期必须动态取当日：引擎只把「今日」的签到事件计入 CreditIn，硬编码日期会在
-// 次日直接失败（PR #73 原本写死 2026/10/06，合入当天就已失效）。
 func TestLogWriterObserveEvents(t *testing.T) {
 	a := newPanelApp(t, "127.0.0.1", "")
 	lw := &logWriter{app: a}

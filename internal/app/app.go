@@ -19,10 +19,8 @@ import (
 	"time"
 
 	"wild-work/internal/auth"
-	"wild-work/internal/backuplink"
 	"wild-work/internal/cline"
 	"wild-work/internal/config"
-	"wild-work/internal/custom"
 	"wild-work/internal/ledger"
 	"wild-work/internal/login"
 	logincodearts "wild-work/internal/login_codearts"
@@ -39,7 +37,6 @@ import (
 	logintrae "wild-work/internal/login_trae"
 	"wild-work/internal/login_wbai"
 	loginzcode "wild-work/internal/login_zcode"
-	"wild-work/internal/loopguard"
 	"wild-work/internal/oczen"
 	"wild-work/internal/officeace"
 	"wild-work/internal/platform"
@@ -54,7 +51,6 @@ import (
 	"wild-work/internal/scheduler"
 	statsEngine "wild-work/internal/stats"
 	"wild-work/internal/systray"
-	"wild-work/internal/upstream"
 )
 
 // Version 版本号。
@@ -155,18 +151,6 @@ type App struct {
 	// 由 main.go 注入；nil 时仅写配置不热更。
 	oczenSyncer func(key string)
 
-	// fbSyncer 面板保存模型降级链后推给 server.Handler（热更新降级路由）。
-	// 由 main.go 注入；nil 时仅写配置不热更。
-	fbSyncer func(rules []config.ModelFallbackRule)
-
-	// efSyncer 面板保存思考强度映射后推给 server.Handler（热更新注入表）。
-	// 由 main.go 注入；nil 时仅写配置不热更。
-	efSyncer func(efforts map[string]string)
-
-	// customSyncer 面板保存自定义渠道后热更新（R66）。
-	// 由 main.go 注入；nil 时仅写配置不热更。
-	customSyncer func(channels []custom.ChannelConfig)
-
 	refreshMu  sync.Mutex // 防并发刷新积分
 	refreshing bool
 
@@ -207,8 +191,6 @@ func New(opts Options) (*App, error) {
 	if a.ledger != nil {
 		a.ledgerStop = make(chan struct{})
 		go a.ledger.AutoFlush(a.ledgerStop)
-		// 请求体摘要开关（诊断用，默认关）：进程级全局，启动时与 config.body_log 同步
-		ledger.SetBodyTrace(a.cfg.BodyLog)
 	}
 
 	// 运行统计引擎（data/stats.json）：初始化失败不致命——端点回 disabled、插桩/喂入全判 nil
@@ -427,7 +409,7 @@ func (a *App) creditsNAKind(group string) bool {
 		group == provider.Cline.String() {
 		return true
 	}
-	return a.isCustomChannel(group)
+	return false
 }
 
 // creditsUnit 该渠道「额度」的计量单位：空串 = 积分（credits，默认），`"token"` = Token 计数。
@@ -445,66 +427,6 @@ func (a *App) creditsUnit(group string) string {
 	return "" // 积分（credits）
 }
 
-// isCustomChannel 报告该分组名是否是自定义渠道。先查运行时表（热更新后的权威态），
-// 再回退查配置（供应器未装配/已停用的渠道）。
-// 两把锁分开取：runtimesMu 只管运行时表，a.mu 只管 cfg——不可与外层已持 a.mu 的调用嵌套。
-func (a *App) isCustomChannel(group string) bool {
-	a.runtimesMu.RLock()
-	rt := a.runtimes[provider.Kind(group)]
-	a.runtimesMu.RUnlock()
-	if rt != nil && rt.Custom {
-		return true
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, cc := range a.cfg.CustomChannels {
-		if strings.EqualFold(cc.Name, group) {
-			return true
-		}
-	}
-	return false
-}
-
-// UpdateCustomRuntimes 热更新 app 持有的自定义渠道运行时（R66）。
-// 只碰 runtimes 表（不读 cfg），故用 runtimesMu 而非 a.mu。
-func (a *App) UpdateCustomRuntimes(customRts map[provider.Kind]*Runtime) {
-	a.runtimesMu.Lock()
-	defer a.runtimesMu.Unlock()
-	for k, rt := range a.runtimes {
-		if rt != nil && rt.Custom {
-			delete(a.runtimes, k)
-		}
-	}
-	for k, rt := range customRts {
-		rt.Custom = true
-		a.runtimes[k] = rt
-	}
-}
-
-// SetCustomChannelsSyncer 注入自定义渠道热更新回调。
-func (a *App) SetCustomChannelsSyncer(fn func(channels []custom.ChannelConfig)) {
-	a.customSyncer = fn
-}
-
-// noExplicitCheckin 不支持显式签到（手动按钮）的渠道。
-// WorkBuddy 国际版改为定时自动对话保活并领取日活奖励（详见 workbuddyai.DailyCheckin），
-// 无需用户手动触发，故也不提供手动签到入口；
-// 千问办公无签到活动且每日积分服务端被动发放，无需领取/保活。
-// QoderCN / QoderCOM 已实现签到（campaigns 主路径），支持手动按钮。
-// 智谱清言已实现 activity-api 每日签到，支持手动按钮。
-// 小浣熊已实现 setting_info 触发每日积分落账（见 internal/raccoon/checkin.go，R65），支持手动按钮。
-// MonkeyCode 已实现签到（POST {console}/api/v1/users/wallet/checkin，见 internal/monkeycode/checkin.go），
-// 支持手动按钮并参与批量签到 —— 故**不在**本名单内（2026-10-17 起，此前误列为「无签到」）。
-// Loomy 已实现签到（宠物每日打工奖励，POST /api/v1/pet-work/rewards，0~1000 分），
-// 支持手动按钮并参与批量签到 —— 故**不在**本名单内（2026-10-17 接线完成）。
-// ⚠️ 它的判据是该账号当日**有效对话轮次**（由上游计算，见 internal/loomy/checkin.go 文件头）：
-// 本工具是 API 网关、不产生轮次归属，故未在官方客户端用过该账号时，领取结果是
-// 「未达档位」（可重试 error），**不是**「无活动」——这是如实状态，不是缺陷。
-// Cline 走官方 API Key：无签到活动、Key 不过期 ⇒ 既不需手动签到也不需保活。
-// OpenCodeZen 匿名通道无账号概念，既无签到也无积分。
-// Kilo 免费池同为免密渠道：无账号、无签到、无积分。
-// 自定义渠道无签到活动（R66）；内建名单固定，故抽成无状态的包级函数（可脱离 App 断言），
-// 方法体仅补上「是否自定义渠道」这一动态判定。
 func noExplicitCheckin(k provider.Kind) bool {
 	// GLM 的每日签到必须先发一轮最小对话（keepaliveChat），属于查看器明确移除的
 	// 聊天保活，故不提供手动/批量入口。
@@ -512,7 +434,7 @@ func noExplicitCheckin(k provider.Kind) bool {
 }
 
 func (a *App) noExplicitCheckinKind(k provider.Kind) bool {
-	return noExplicitCheckin(k) || a.isCustomChannel(k.String())
+	return noExplicitCheckin(k)
 }
 
 func (a *App) findRuntimeAuth(uid string) (*Runtime, *auth.Auth) {
@@ -2419,13 +2341,7 @@ func (a *App) RemoveAccount(uid string) error {
 		return fmt.Errorf("Kilo 免费池账号不可删除")
 	}
 	if rt.Custom {
-		var next []custom.ChannelConfig
-		for _, cc := range a.cfg.CustomChannels {
-			if !strings.EqualFold(cc.Name, rt.Kind.String()) {
-				next = append(next, cc)
-			}
-		}
-		return a.SetCustomChannels(next)
+		return fmt.Errorf("自定义渠道已移除，无法删除 %s", rt.Kind)
 	}
 	if au.FilePath != "" {
 		_ = os.Remove(au.FilePath)
@@ -2437,36 +2353,6 @@ func (a *App) RemoveAccount(uid string) error {
 	return nil
 }
 
-// DisableAccount 停用/启用账号。
-// oczen / kilo 的虚拟账号不可停用：停用后无法从面板恢复，而这两条渠道各自只有一个
-// 虚拟账号，停用等于禁用整条渠道。
-func (a *App) DisableAccount(uid string, disabled bool) error {
-	rt, _ := a.findRuntimeAuth(uid)
-	if rt == nil || rt.Pool == nil {
-		return fmt.Errorf("unknown account %s", uid)
-	}
-	if rt.Kind == provider.Oczen {
-		return fmt.Errorf("OpenCodeZen 匿名通道账号不可停用/启用")
-	}
-	if rt.Kind == provider.Kilo {
-		return fmt.Errorf("Kilo 免费池账号不可停用/启用")
-	}
-	// R83 起自定义渠道没有 enabled 概念（要么在列表里=启用，要么被删除），
-	// 故不再走「停用即写配置」的特例；落到下面常规的 pool.SetDisabled。
-	// 效果差异：面板重启后自定义渠道的停用状态不再持久化 —— 这正是删除该功能的本意。
-	rt.Pool.SetDisabled(uid, disabled)
-	if disabled {
-		log.Printf("已停用账号 %s", shortUID(uid))
-	} else {
-		log.Printf("已启用账号 %s", shortUID(uid))
-	}
-	return nil
-}
-
-// ResourceDetail 查询单个账号积分明细（含可用/不可用/临期小计）。
-// 返回的 remain 与 items 同时给出：remain 供 pool 口径对账，items 供 UI 明细展示。
-// 取数经 creditSnapshot：实时拉取的同时把同一响应回写 pool 快照，故面板展开明细后
-// 卡片顶层与弹层同源一致，不再依赖刷新按钮弥合时差；401 自愈亦在 creditSnapshot 内。
 func (a *App) ResourceDetail(uid string) (remain int64, items []provider.ResourceItem, expiring, unusable int64, err error) {
 	rt, au := a.findRuntimeAuth(uid)
 	if rt == nil || au == nil || rt.Upstream == nil {
@@ -2486,29 +2372,6 @@ func (a *App) ResourceDetail(uid string) (remain int64, items []provider.Resourc
 	return a.creditSnapshot(rt, au)
 }
 
-// ---------------------------------------------------------------------------
-// 配置操作
-// ---------------------------------------------------------------------------
-
-// SetBodyLog 开关请求体构成摘要记录（诊断用：定位上下文为何膨胀）。
-func (a *App) SetBodyLog(on bool) error {
-	a.mu.Lock()
-	a.cfg.BodyLog = on
-	err := config.Save(a.cfg, a.cfgPath)
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	ledger.SetBodyTrace(on)
-	if on {
-		log.Printf("请求体摘要记录已开启（写 data/ledger/body-trace-*.jsonl）")
-	} else {
-		log.Printf("请求体摘要记录已关闭")
-	}
-	return nil
-}
-
-// SetCheckinTimes 更新自动签到时间（HH:MM）并立即唤醒两个调度器。
 func (a *App) SetCheckinTimes(times []string) error {
 	minutes, err := config.ParseClockTimes(times)
 	if err != nil {
@@ -2561,24 +2424,6 @@ func (a *App) SetExpiringDays(days int) error {
 	return nil
 }
 
-// SetLoopGuard 更新思考链死循环检测（发癫拦截）开关：保存配置并即时生效。
-// 生效机制：loopguard 的全局 atomic 开关，各渠道 Stream 在每次请求时读取，
-// 热切换无需重启（下一个流式请求即按新值）。
-func (a *App) SetLoopGuard(on bool) error {
-	a.mu.Lock()
-	a.cfg.Features.LoopGuard = on
-	err := config.Save(a.cfg, a.cfgPath)
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	loopguard.SetEnabled(on)
-	log.Printf("思考链死循环检测已%s", map[bool]string{true: "开启", false: "关闭"}[on])
-	return nil
-}
-
-// SetCheckinEnabled 纯签到总开关：保存配置并即时生效。
-// 关闭后手动与定时签到都不再执行；查看器不会用任何聊天保活替代签到。
 func (a *App) SetCheckinEnabled(on bool) error {
 	a.mu.Lock()
 	a.cfg.Features.CheckinEnabled = on
@@ -2643,21 +2488,6 @@ func (a *App) SetAdminPassword(pass string) error {
 	return nil
 }
 
-// SetAPIKey 修改 API 密钥。
-func (a *App) SetAPIKey(key string) error {
-	key = strings.TrimSpace(key)
-	a.mu.Lock()
-	a.cfg.APIKey = key
-	err := config.Save(a.cfg, a.cfgPath)
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	log.Printf("API-Key 已保存（查看器不提供转发接口，该值不再参与鉴权）")
-	return nil
-}
-
-// SetAutostart 设置/取消开机自启。
 func (a *App) SetAutostart(on bool) error {
 	if err := platform.SetAutostart(on); err != nil {
 		return err
@@ -2680,103 +2510,6 @@ func (a *App) ServerRunning() bool {
 	return a.httpSrv != nil
 }
 
-// SetCompat 保存模型名路由与思考强度配置（compat 段）并写回 config.json。
-// reasoningEffort 为空表示不注入默认档；reasoningSummary 为空按 auto 处理；
-// deepseekThinking 控制 WorkBuddy 上游 DeepSeek 系的 thinking 开关字段与回填；
-// staticEffortFallback 控制档位静态兜底表（上游未声明档位时是否用内置表补齐）；
-// 非法取值直接报错（不写盘）。逐模型的上下文档位走 SetContextWindow。
-func (a *App) SetCompat(defaultChannel string, maxTokensCap int, modelMap map[string]string, reasoningEffort, reasoningSummary string, deepseekThinking, staticEffortFallback bool) error {
-	if modelMap == nil {
-		modelMap = map[string]string{}
-	}
-	for _, v := range modelMap {
-		if strings.TrimSpace(v) == "" {
-			return fmt.Errorf("model_map 的值不能为空（应为 channel/model）")
-		}
-		if strings.Index(v, "/") <= 0 {
-			return fmt.Errorf("model_map 值 %q 需为 channel/model 形式", v)
-		}
-	}
-	effort, err := reasoning.ParseDefault(reasoningEffort)
-	if err != nil {
-		return fmt.Errorf("reasoning_effort %w", err)
-	}
-	summary, err := reasoning.ParseSummaryMode(reasoningSummary)
-	if err != nil {
-		return err
-	}
-	a.mu.Lock()
-	a.cfg.Compat.DefaultChannel = defaultChannel
-	a.cfg.Compat.MaxTokensCap = maxTokensCap
-	a.cfg.Compat.ModelMap = modelMap
-	a.cfg.Compat.ReasoningEffort = effort
-	a.cfg.Compat.ResponsesReasoningSummary = summary
-	a.cfg.Compat.DeepseekThinking = &deepseekThinking
-	a.cfg.Compat.StaticEffortFallback = &staticEffortFallback
-	err = config.Save(a.cfg, a.cfgPath)
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	// 热更新外层兼容层的路由表：不同步的话新映射要重启才生效。
-	if a.compatSyncer != nil {
-		a.compatSyncer(defaultChannel, maxTokensCap, modelMap, summary)
-	}
-	// DeepSeek 思考改写开关作用于渠道层（包级开关），立即生效。
-	upstream.SetDeepseekThinking(deepseekThinking)
-	// 档位静态兜底表开关作用于档位层（包级开关），立即生效。
-	reasoning.SetStaticEffortFallback(staticEffortFallback)
-	log.Printf("模型名路由配置已更新：default_channel=%q max_tokens_cap=%d reasoning_effort=%q responses_reasoning_summary=%q deepseek_thinking=%v static_effort_fallback=%v model_map=%d 条",
-		defaultChannel, maxTokensCap, effort, summary, deepseekThinking, staticEffortFallback, len(modelMap))
-	return nil
-}
-
-// SetContextWindow 设置单个模型的上下文窗口档位。
-// model 为 "渠道/模型"（与 /v1/models 的 id 同格式）；window <= 0 表示清除该模型的设置。
-// 目前仅 Qoder 的请求体有可指定的窗口字段，其它渠道只记录不影响转发。
-func (a *App) SetContextWindow(model string, window int64) error {
-	if _, _, ok := strings.Cut(model, "/"); !ok {
-		return fmt.Errorf("模型名 %q 需为 channel/model 形式", model)
-	}
-	a.mu.Lock()
-	if a.cfg.Compat.ContextWindows == nil {
-		a.cfg.Compat.ContextWindows = map[string]int64{}
-	}
-	if window <= 0 {
-		delete(a.cfg.Compat.ContextWindows, model)
-	} else {
-		a.cfg.Compat.ContextWindows[model] = window
-	}
-	err := config.Save(a.cfg, a.cfgPath)
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	a.ApplyContextWindows()
-	return nil
-}
-
-// ApplyContextWindows 把逐模型档位推给各渠道（包级开关），立即生效。
-// key 去掉渠道前缀后按客户端模型名下发——渠道包只认自己命名空间里的模型名。
-func (a *App) ApplyContextWindows() {
-	byKind := map[provider.Kind]map[string]int64{}
-	for k, v := range a.cfg.Compat.ContextWindows {
-		ch, model, ok := strings.Cut(k, "/")
-		if !ok || model == "" {
-			continue
-		}
-		kind := provider.Kind(ch)
-		if byKind[kind] == nil {
-			byKind[kind] = map[string]int64{}
-		}
-		byKind[kind][model] = v
-	}
-	qoder.SetContextWindows(byKind[provider.Qoder])
-}
-
-// feeChannelOrderWithDynamic 返回费率表渠道顺序：静态 feeChannelOrder + 未登记的动态渠道
-// （自定义渠道，R66）追加到末尾（按名排序）。仅当 modelsByKind 里确有该渠道的模型时
-// 才追加，避免空渠道占位。
 func feeChannelOrderWithDynamic(modelsByKind map[provider.Kind][]provider.ModelInfo) []provider.Kind {
 	seen := make(map[provider.Kind]bool, len(feeChannelOrder))
 	for _, k := range feeChannelOrder {
@@ -2807,301 +2540,6 @@ type customRename struct {
 	Old string `json:"old"`
 }
 
-// SetCustomChannels 整表替换自定义渠道配置（R66）。
-//
-// api_key 脱敏回写处理（同 oczen key）：面板回显的是脱敏值。用户没改动过某个渠道的 key 时，
-// 提交回来的仍是脱敏串——若原样落盘就把真实密钥换成了废值。故：提交值是脱敏形态
-// （isMaskedKey）则视为未修改，从现有配置按渠道名找回真实密钥；改名过的渠道另按旧名找回。
-func (a *App) SetCustomChannels(channels []custom.ChannelConfig, renames ...customRename) error {
-	_, err := a.setCustomChannels(channels, renames)
-	return err
-}
-
-// setCustomChannels 同 SetCustomChannels，额外返回**真正生效**的改名条数（面板要如实告知用户
-// 引用配置被联动了几处；非法/无效的改名声明会被丢弃，不能拿提交数当成绩）。
-func (a *App) setCustomChannels(channels []custom.ChannelConfig, renames []customRename) (int, error) {
-	seen := map[string]bool{}
-	for i := range channels {
-		if isMaskedKey(channels[i].APIKey) { // 脱敏形态 = 未改动，保留现值
-			channels[i].APIKey = ""
-		}
-		if err := channels[i].Validate(); err != nil {
-			return 0, err
-		}
-		if seen[channels[i].Name] {
-			return 0, fmt.Errorf("重复的渠道标识 %q", channels[i].Name)
-		}
-		seen[channels[i].Name] = true
-	}
-	a.mu.Lock()
-	// 找回被提交为脱敏形态的密钥（按渠道名匹配现值）
-	prev := map[string]string{}
-	prevNames := map[string]bool{}
-	for _, cc := range a.cfg.CustomChannels {
-		prev[strings.ToLower(cc.Name)] = cc.APIKey
-		prevNames[strings.ToLower(cc.Name)] = true
-	}
-	// 改名映射（新→旧）：密钥找回与后续级联都靠它；非法项直接丢（旧名不存在或新旧相同不算改名）
-	ren := map[string]string{}
-	for _, r := range renames {
-		nw, od := strings.ToLower(strings.TrimSpace(r.New)), strings.ToLower(strings.TrimSpace(r.Old))
-		if nw == "" || od == "" || nw == od || !prevNames[od] || prevNames[nw] {
-			continue
-		}
-		ren[nw] = od
-	}
-	for i := range channels {
-		if channels[i].APIKey != "" {
-			continue
-		}
-		k := prev[channels[i].Name]
-		if k == "" { // 改名后按新名查不到 ⇒ 必须回退查旧名，否则真密钥被空串覆盖并落盘
-			if od, ok := ren[channels[i].Name]; ok {
-				k = prev[od]
-			}
-		}
-		if k != "" {
-			channels[i].APIKey = k
-		}
-	}
-	compatTouched := 0
-	if len(ren) > 0 {
-		compatTouched = renameCustomRefs(a.cfg, ren)
-	}
-	a.cfg.CustomChannels = channels
-	err := config.Save(a.cfg, a.cfgPath)
-	syncer := a.customSyncer
-	fbSyncer, efSyncer := a.fbSyncer, a.efSyncer
-	fbRules, efforts := a.cfg.ModelFallback, a.cfg.ReasoningEfforts
-	a.mu.Unlock()
-	if err != nil {
-		return 0, fmt.Errorf("保存配置失败：%w", err)
-	}
-	// 改名连带改写了降级链/思考强度映射，而这两张表在 server.Handler 里是**另一份内存副本**：
-	// 只改 cfg 不推 syncer，热路径会继续拿旧 key 查（要到面板重存一次才能修好）。
-	if len(ren) > 0 {
-		if fbSyncer != nil {
-			fbSyncer(fbRules)
-		}
-		if efSyncer != nil {
-			efSyncer(efforts)
-		}
-	}
-	for nw, od := range ren {
-		renameCustomState(a.stateDir(), od, nw) // 旧 state 文件留 .old，不硬删
-		log.Printf("自定义渠道标识已改名：%s → %s（引用配置联动 %d 处）", od, nw, compatTouched)
-	}
-	if syncer != nil {
-		syncer(channels)
-	}
-	log.Printf("自定义渠道配置已更新：共 %d 个渠道", len(channels))
-	return len(ren), nil
-}
-
-// renameCustomRefs 把以 `旧标识/` 为键或值前缀的引用配置改写成新标识（R122）：
-// compat.model_map / compat.default_channel / model_fallback / reasoning_efforts。
-//
-// 为什么必须联动：这几类配置**只校形状不校渠道存在性**，改名后旧前缀不会报错、只会静默
-// 失效（用户看到「配置还在、就是不起作用」）。返回改写条数，供面板如实告知。持 a.mu 调用。
-func renameCustomRefs(cfg *config.Config, ren map[string]string) int {
-	// ren 的方向是「新→旧」（密钥找回靠它），而引用配置里出现的是**旧名** ⇒ 必须先倒转。
-	// 同一个旧名被声明改成两个新名是脏数据（无法判断哪个是真），跳过它，不猜。
-	cnt := map[string]int{}
-	for _, od := range ren {
-		cnt[od]++
-	}
-	to := make(map[string]string, len(ren))
-	for nw, od := range ren {
-		if cnt[od] == 1 {
-			to[od] = nw
-		}
-	}
-	swap := func(s string) string {
-		if i := strings.Index(s, "/"); i > 0 {
-			if nw, ok := to[strings.ToLower(s[:i])]; ok {
-				return nw + s[i:]
-			}
-		}
-		return s
-	}
-	n := 0
-	for k, v := range cfg.Compat.ModelMap {
-		if nv := swap(v); nv != v {
-			cfg.Compat.ModelMap[k] = nv
-			n++
-		}
-	}
-	if od := strings.ToLower(strings.TrimSpace(cfg.Compat.DefaultChannel)); od != "" {
-		if nw, ok := to[od]; ok {
-			cfg.Compat.DefaultChannel = nw
-			n++
-		}
-	}
-	for i := range cfg.ModelFallback {
-		if v := swap(cfg.ModelFallback[i].From); v != cfg.ModelFallback[i].From {
-			cfg.ModelFallback[i].From, n = v, n+1
-		}
-		for j := range cfg.ModelFallback[i].To {
-			if v := swap(cfg.ModelFallback[i].To[j]); v != cfg.ModelFallback[i].To[j] {
-				cfg.ModelFallback[i].To[j], n = v, n+1
-			}
-		}
-	}
-	for k, v := range cfg.ReasoningEfforts {
-		if nk := swap(k); nk != k {
-			delete(cfg.ReasoningEfforts, k)
-			cfg.ReasoningEfforts[nk] = v
-			n++
-		}
-	}
-	return n
-}
-
-// renameCustomState 把 state-custom-<旧>.json 改名留档（照 migrateStateFiles 的先例：只 rename
-// 不删除，便于回滚）。新标识的池子从零开始，不搬旧快照——旧文件里的 UID 是 `custom-<旧>`，
-// 原样搬到新文件会把一个对不上号的账号条目弄进新池子里。
-func renameCustomState(dir, oldName, newName string) {
-	old := filepath.Join(dir, "state-custom-"+oldName+".json")
-	if !fileExists(old) {
-		return
-	}
-	if err := os.Rename(old, old+".old"); err != nil {
-		log.Printf("迁移自定义渠道状态文件失败（%s）：%v", oldName, err)
-	}
-}
-
-// resolveCustomKey 按渠道名取真实 api_key（供脱敏回显时的测试与保存路径使用）。
-// 名称为空（面板新增渠道时只填了 URL/Key）则返回空串，交由调用方自行处理。
-func (a *App) resolveCustomKey(name string) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, cc := range a.cfg.CustomChannels {
-		if strings.EqualFold(cc.Name, name) {
-			return cc.APIKey
-		}
-	}
-	return ""
-}
-
-// customChannelFeesMeta 返回渠道名 -> [接入点, 脱敏 key]，只给费率页用（R119）。
-// 这里给的必须是 maskKey 后的脱敏串：费率页会被面板反复拉，批量发明文等于
-// 把所有第三方 key 长期暴露在浏览器内存/抓包里。
-func (a *App) customChannelFeesMeta() map[string][2]string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make(map[string][2]string, len(a.cfg.CustomChannels))
-	for _, cc := range a.cfg.CustomChannels {
-		out[cc.Name] = [2]string{cc.BaseURL, maskKey(cc.APIKey)}
-	}
-	return out
-}
-
-// maskCustomChannels 返回配置的深拷贝，并将 api_key 脱敏（长头 + **** + 短尾，见 maskKey）。
-// 脱敏串里的 **** 就是「未改动」标记，供 SetCustomChannels / 测试端点识别。
-func maskCustomChannels(in []custom.ChannelConfig) []custom.ChannelConfig {
-	out := make([]custom.ChannelConfig, 0, len(in))
-	for _, cc := range in {
-		if cc.APIKey != "" {
-			cc.APIKey = maskKey(cc.APIKey)
-		}
-		if cc.Models != nil {
-			cc.Models = append([]custom.ModelConfig(nil), cc.Models...)
-		}
-		out = append(out, cc)
-	}
-	return out
-}
-
-// SetCompatSyncer 注入 compat 热更新回调（由 main.go 注入，指向 gateway.SetCompat）。
-func (a *App) SetCompatSyncer(fn func(defaultChannel string, maxTokensCap int, modelMap map[string]string, reasoningSummary string)) {
-	a.compatSyncer = fn
-}
-
-// SetModelFallbackSyncer 注入模型降级链热更新回调（由 main.go 注入：推给 server.Handler）。
-func (a *App) SetModelFallbackSyncer(fn func(rules []config.ModelFallbackRule)) { a.fbSyncer = fn }
-
-// SetModelFallback 保存模型降级链（设置面板可视化编辑）。
-// 校验：From/To 均须 "channel/model" 全路径；From 全局唯一；每链 To 至少一项、
-// 不含 From 自身（不自环）；空规则列表 = 清空禁用。保存即热生效（fbSyncer）。
-func (a *App) SetModelFallback(rules []config.ModelFallbackRule) error {
-	seen := map[string]bool{}
-	for i := range rules {
-		r := &rules[i]
-		r.From = strings.TrimSpace(r.From)
-		if strings.Index(r.From, "/") <= 0 {
-			return fmt.Errorf("规则 %d 的主模型 %q 需为 channel/model 形式", i+1, r.From)
-		}
-		if seen[r.From] {
-			return fmt.Errorf("主模型 %q 重复（每个主模型只允许一条规则）", r.From)
-		}
-		seen[r.From] = true
-		tos := make([]string, 0, len(r.To))
-		for _, to := range r.To {
-			to = strings.TrimSpace(to)
-			if to == "" {
-				continue
-			}
-			if strings.Index(to, "/") <= 0 {
-				return fmt.Errorf("主模型 %q 的备胎 %q 需为 channel/model 形式", r.From, to)
-			}
-			if to == r.From {
-				return fmt.Errorf("主模型 %q 的备胎不能是它自己", r.From)
-			}
-			tos = append(tos, to)
-		}
-		if len(tos) == 0 {
-			return fmt.Errorf("主模型 %q 的降级链为空（至少填一个备胎模型）", r.From)
-		}
-		r.To = tos
-	}
-	a.mu.Lock()
-	a.cfg.ModelFallback = rules
-	err := config.Save(a.cfg, a.cfgPath)
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if a.fbSyncer != nil {
-		a.fbSyncer(rules)
-	}
-	log.Printf("模型降级链已更新（%d 条规则，保存即热生效）", len(rules))
-	return nil
-}
-
-// SetReasoningEffortsSyncer 注入思考强度映射热更新回调（由 main.go 注入：推给 server.Handler）。
-func (a *App) SetReasoningEffortsSyncer(fn func(efforts map[string]string)) { a.efSyncer = fn }
-
-// SetReasoningEfforts 保存思考强度注入映射（设置面板可视化编辑）。
-// 校验：键（模型 ID，含 `*` 全局默认）与值（档位）trim 后均非空；删除 = 键缺席；
-// 空 map = 清空禁用。哑管道：不校验档位取值合法性，上游吃什么档位由渠道模型自己说了算。
-// 保存即热生效（efSyncer）。
-func (a *App) SetReasoningEfforts(efforts map[string]string) error {
-	clean := make(map[string]string, len(efforts))
-	for k, v := range efforts {
-		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		if k == "" {
-			return fmt.Errorf("模型 ID 不能为空（`*` 为合法的全局默认键）")
-		}
-		if v == "" {
-			return fmt.Errorf("模型 %q 的思考档位不能为空", k)
-		}
-		clean[k] = v
-	}
-	a.mu.Lock()
-	a.cfg.ReasoningEfforts = clean
-	err := config.Save(a.cfg, a.cfgPath)
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if a.efSyncer != nil {
-		a.efSyncer(clean)
-	}
-	log.Printf("思考强度映射已更新（%d 条，保存即热生效）", len(clean))
-	return nil
-}
-
-// SetOczenSyncer 注入 oczen key 热更新回调（由 main.go 注入：写入渠道 client）。
 func (a *App) SetOczenSyncer(fn func(key string)) { a.oczenSyncer = fn }
 
 // TestOczenKey 验证 OpenCodeZen 凭证可用性（设置面板「测试」按钮）。
@@ -3164,43 +2602,6 @@ func isMaskedKey(s string) bool {
 	return strings.Contains(s, maskedMark) || strings.Contains(s, "…") || strings.Contains(s, "••")
 }
 
-// SetBackupProxy 保存全局**备用上游通道**（单一代理地址，空串 = 关闭）并即时生效。
-// 同时接收 oczenKey：设置 OpenCodeZen 自定义 API key（空 = 回匿名凭证）。
-//
-// 生效方式与旧的「每渠道代理」根本不同：此处**不重建任何渠道 Transport**，
-// 只换 backuplink 内部的快照指针（决议 R57）——备用通道不参与常规请求，
-// 渠道在命中地区拒绝时自己按需取用，因此没有「热更新接线表」可漏（旧实现
-// 启动表 13 个渠道、热更新表只 10 个，traecode 两个表都没进）。
-func (a *App) SetBackupProxy(raw, oczenKey string) error {
-	raw = strings.TrimSpace(raw)
-	if _, err := backuplink.Parse(raw); err != nil { // 空串合法（= 关闭）
-		return err
-	}
-	a.mu.Lock()
-	a.cfg.BackupProxy = raw
-	if oczenKey != "\u0000unset\u0000" { // 哨兵：请求未携带该字段时不改动现有 key
-		a.cfg.OczenAPIKey = strings.TrimSpace(oczenKey)
-	}
-	err := config.Save(a.cfg, a.cfgPath)
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if err := backuplink.Set(raw); err != nil { // 已校验过，这里不应再失败
-		return err
-	}
-	if a.oczenSyncer != nil {
-		a.oczenSyncer(a.cfg.OczenAPIKey)
-	}
-	if raw == "" {
-		log.Printf("备用上游通道已关闭（所有请求直连；上游回地区拒绝将原样透传）")
-	} else {
-		log.Printf("备用上游通道已配置：%s（仅渠道命中地区拒绝时自动取用，不影响常规请求）", raw)
-	}
-	return nil
-}
-
-// SetAccountNickname 修改账号显示名：写回 auth 文件 + 池内即时生效。
 func (a *App) SetAccountNickname(uid, nickname string) error {
 	nickname = strings.TrimSpace(nickname)
 	if nickname == "" {
@@ -3323,11 +2724,9 @@ type ModelCoolView struct {
 type State struct {
 	Accounts       []AccountView `json:"accounts"`
 	CheckinTimes   []string      `json:"checkin_times"`
-	KeepaliveHours []int         `json:"keepalive_hours"`
 	ExpiringDays   int           `json:"expiring_days"` // 临期展示窗口（天），仅支持 1/2/3
 	ListenHost     string        `json:"listen_host"`
 	ListenPort     int           `json:"listen_port"`
-	APIKey         string        `json:"api_key"`
 
 	// AdminPassSet 是否已配置管理密码（不回显密码本身）；
 	// AuthEnabled = 面板鉴权已生效（密码非空）；
@@ -3348,51 +2747,12 @@ type State struct {
 	// 取不到（无网络/全部环回）时为空串。
 	LanIP string `json:"lan_ip"`
 
-	// Compat 模型名路由配置（只读，保存走 POST /api/config/compat）
-	Compat struct {
-		DefaultChannel  string            `json:"default_channel"`
-		MaxTokensCap    int               `json:"max_tokens_cap"`
-		ModelMap        map[string]string `json:"model_map"`
-		ReasoningEffort string            `json:"reasoning_effort"` // 默认思考档，空 = 不注入
-		// ResponsesReasoningSummary Responses 思考摘要策略：auto / on / off
-		ResponsesReasoningSummary string `json:"responses_reasoning_summary"`
-		// DeepseekThinking WorkBuddy 上游 DeepSeek 系思考改写开关（默认 true）
-		DeepseekThinking bool `json:"deepseek_thinking"`
-		// StaticEffortFallback 档位静态兜底表开关（默认 true）
-		StaticEffortFallback bool `json:"static_effort_fallback"`
-		// ContextWindows 逐模型上下文窗口档位（key = "渠道/模型"）
-		ContextWindows map[string]int64 `json:"context_windows"`
-		Channels       []string         `json:"channels"` // 可用渠道列表（供 UI 下拉）
-	} `json:"compat"`
-
-	// BackupProxy 全局备用上游通道（只读，保存走 POST /api/config/proxy）。
-	// 注意：它**不参与常规请求**，仅当渠道自行判定上游按地区拒绝时在同请求内重放一次（R57）。
-	BackupProxy string `json:"backup_proxy"`
-
-	// BackupProxyActive 备用通道是否已生效（与 BackupProxy 非空等价，分开回显
-	// 是为了让面板能区分「地址合法但进程内未生效」这种理论上不应存在的状态）。
-	BackupProxyActive bool `json:"backup_proxy_active"`
-
-	// OczenAPIKey OpenCodeZen 自定义 API key（只读脱敏回显：sk-xxx…尾4位；保存走同端点）。
+	// OczenAPIKey OpenCodeZen 自定义 API key（只读脱敏回显）：仅用于目录/额度查询的鉴权。
 	OczenAPIKey string `json:"oczen_api_key"`
 
-	// BodyLog 请求体摘要诊断是否开启（只读，保存走 POST /api/config/body_log）。
-	BodyLog bool `json:"body_log"`
-
-	// LoopGuard 思考链死循环检测（发癫拦截）是否开启（只读，保存走 POST /api/config/loop_guard）。
-	LoopGuard bool `json:"loop_guard"`
 	// CheckinEnabled 纯签到总开关（只读，保存走 POST /api/config/checkin_enabled）。
 	// 关闭时手动签到与定时签到一律不执行。
 	CheckinEnabled bool `json:"checkin_enabled"`
-
-	// ModelFallback 模型降级链（保存走 POST /api/config/model_fallback）。
-	ModelFallback []config.ModelFallbackRule `json:"model_fallback"`
-
-	// ReasoningEfforts 思考强度注入映射（键=模型 ID 或 `*` 全局默认；保存走 POST /api/config/reasoning_efforts）。
-	ReasoningEfforts map[string]string `json:"reasoning_efforts"`
-
-	// CustomChannels 自定义第三方渠道列表（保存走 POST /api/config/custom_channels，R66）。
-	CustomChannels []custom.ChannelConfig `json:"custom_channels"`
 }
 
 // GetState 返回面板初始数据。
@@ -3408,11 +2768,9 @@ func (a *App) GetState() State {
 	}
 	st := State{
 		CheckinTimes:   a.checkinTimes(),
-		KeepaliveHours: a.keepaliveHours(),
 		ExpiringDays:   int(a.cfg.ExpiringThresholdDur / (24 * time.Hour)),
 		ListenHost:     listen.Host,
 		ListenPort:     listen.Port,
-		APIKey:         a.cfg.APIKey,
 		AdminPassSet:   authOn,
 		AuthEnabled:    authOn,
 		AuthSession:    session,
@@ -3423,42 +2781,9 @@ func (a *App) GetState() State {
 		Autostart:      a.AutostartEnabled(),
 		Running:        a.ServerRunning(),
 		LanIP:          lanIP(),
-		LoopGuard:      a.cfg.Features.LoopGuard,
 		CheckinEnabled: a.cfg.Features.CheckinEnabled,
+		OczenAPIKey:    maskKey(a.cfg.OczenAPIKey),
 	}
-	st.ModelFallback = a.cfg.ModelFallback
-	st.ReasoningEfforts = a.cfg.ReasoningEfforts
-	if st.ReasoningEfforts == nil {
-		st.ReasoningEfforts = map[string]string{}
-	}
-	st.Compat.DefaultChannel = a.cfg.Compat.DefaultChannel
-	st.Compat.MaxTokensCap = a.cfg.Compat.MaxTokensCap
-	st.Compat.ReasoningEffort = a.cfg.Compat.ReasoningEffort
-	st.Compat.ResponsesReasoningSummary = a.cfg.Compat.ResponsesReasoningSummary
-	st.Compat.DeepseekThinking = a.cfg.DeepseekThinkingEnabled()
-	st.Compat.StaticEffortFallback = a.cfg.StaticEffortFallbackEnabled()
-	st.Compat.ContextWindows = a.cfg.Compat.ContextWindows
-	if st.Compat.ContextWindows == nil {
-		st.Compat.ContextWindows = map[string]int64{}
-	}
-	st.Compat.ModelMap = a.cfg.Compat.ModelMap
-	if st.Compat.ModelMap == nil {
-		st.Compat.ModelMap = map[string]string{}
-	}
-	for _, rt := range a.runtimesSnapshot() {
-		if rt != nil {
-			st.Compat.Channels = append(st.Compat.Channels, rt.Kind.String())
-		}
-	}
-	sort.Strings(st.Compat.Channels)
-	st.BackupProxy = a.cfg.BackupProxy
-	st.BackupProxyActive = backuplink.Enabled()
-	// oczen key 脱敏回显（与自定义渠道同一套 maskKey，面板侧靠 **** 识别未改动）
-	st.OczenAPIKey = maskKey(a.cfg.OczenAPIKey)
-	st.BodyLog = a.cfg.BodyLog
-	// 自定义渠道路由的 api_key 同样脱敏回显（不把上游密钥明文送进面板载荷）。
-	// 返回深拷贝而非配置引用，避免调用方意外改写配置。
-	st.CustomChannels = maskCustomChannels(a.cfg.CustomChannels)
 	st.Accounts = a.accountViews()
 	return st
 }
@@ -3937,18 +3262,6 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
-	mux.HandleFunc("POST /api/account/disable", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			UID      string `json:"uid"`
-			Disabled bool   `json:"disabled"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if err := a.DisableAccount(req.UID, req.Disabled); err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
 	mux.HandleFunc("POST /api/account/resource_detail", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			UID string `json:"uid"`
@@ -4004,17 +3317,6 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "checkin_enabled": a.CheckinEnabled()})
 	})
-	mux.HandleFunc("POST /api/config/loop_guard", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			On bool `json:"on"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if err := a.SetLoopGuard(req.On); err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
 	mux.HandleFunc("POST /api/config/listen", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Host      string  `json:"host"`
@@ -4047,17 +3349,6 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
-	mux.HandleFunc("POST /api/config/api_key", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Key string `json:"key"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if err := a.SetAPIKey(req.Key); err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
 	mux.HandleFunc("POST /api/config/autostart", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			On bool `json:"on"`
@@ -4068,192 +3359,6 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("POST /api/config/context_window", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Model  string `json:"model"`
-			Window int64  `json:"window"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if err := a.SetContextWindow(req.Model, req.Window); err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("POST /api/config/model_fallback", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Rules []config.ModelFallbackRule `json:"rules"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if err := a.SetModelFallback(req.Rules); err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("POST /api/config/reasoning_efforts", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Efforts map[string]string `json:"efforts"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if err := a.SetReasoningEfforts(req.Efforts); err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("POST /api/config/compat", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			DefaultChannel            string            `json:"default_channel"`
-			MaxTokensCap              int               `json:"max_tokens_cap"`
-			ModelMap                  map[string]string `json:"model_map"`
-			ReasoningEffort           string            `json:"reasoning_effort"`
-			ResponsesReasoningSummary string            `json:"responses_reasoning_summary"`
-			DeepseekThinking          *bool             `json:"deepseek_thinking"`
-			StaticEffortFallback      *bool             `json:"static_effort_fallback"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		// 字段缺失（旧版前端/第三方调用）按启用处理，避免静默关掉该能力。
-		deepseekThinking := true
-		if req.DeepseekThinking != nil {
-			deepseekThinking = *req.DeepseekThinking
-		}
-		staticEffortFallback := true
-		if req.StaticEffortFallback != nil {
-			staticEffortFallback = *req.StaticEffortFallback
-		}
-		if err := a.SetCompat(req.DefaultChannel, req.MaxTokensCap, req.ModelMap, req.ReasoningEffort, req.ResponsesReasoningSummary, deepseekThinking, staticEffortFallback); err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("POST /api/config/proxy", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Proxy       string  `json:"proxy"`         // 备用上游通道地址（空串 = 关闭）
-			OczenAPIKey *string `json:"oczen_api_key"` // 指针：区分「未携带」与「显式清空」
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		key := "\u0000unset\u0000"
-		if req.OczenAPIKey != nil {
-			key = *req.OczenAPIKey
-		}
-		if err := a.SetBackupProxy(req.Proxy, key); err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("POST /api/config/body_log", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			On bool `json:"on"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if err := a.SetBodyLog(req.On); err != nil {
-			apiError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-	mux.HandleFunc("POST /api/config/oczen_test", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			APIKey string `json:"api_key"` // 空 = 用当前生效凭证（配置中的 key 或匿名）
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		status, body, via, err := a.TestOczenKey(req.APIKey)
-		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": 0, "error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": status == 200 || status == 429, "status": status, "body": body, "via_backup": via})
-	})
-	mux.HandleFunc("POST /api/config/custom_channels", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Channels []custom.ChannelConfig `json:"channels"`
-			Renames  []customRename         `json:"renames"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			apiError(w, http.StatusBadRequest, "解析请求失败："+err.Error())
-			return
-		}
-		n, err := a.setCustomChannels(req.Channels, req.Renames)
-		if err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":       true,
-			"channels": a.cfg.CustomChannels,
-			"renamed":  n,
-		})
-	})
-	mux.HandleFunc("POST /api/config/custom_channel_test", func(w http.ResponseWriter, r *http.Request) {
-		var req custom.ChannelConfig
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			apiError(w, http.StatusBadRequest, "解析请求失败："+err.Error())
-			return
-		}
-		if req.BaseURL == "" {
-			apiError(w, http.StatusBadRequest, "base_url 不能为空")
-			return
-		}
-		// 面板回显的 api_key 是脱敏值：测试未改动过的渠道时必须用真实密钥，否则测试恒报 401
-		//（与 #117 的「探针没走同一条链路」同类）。判定不能只认「…」：脱敏格式改成长头长尾后
-		// 中间是四个星号，两种都得认，因为升级瞬间浏览器里可能还渲染着旧脱敏串。
-		if isMaskedKey(req.APIKey) {
-			req.APIKey = a.resolveCustomKey(req.Name)
-		}
-		// 探测前先做端点定位（R121）：用户粘的地址常带 /chat/completions 尾巴、漏协议头，
-		// 直接拼会请求一个必死地址；Discover 同时回答「哪个根是真的」。
-		// 除纯 ID 外还回能力清单（R119）：前端勾选导入时直接拿这些字段写配置；
-		// 上游没声明的字段保持零值/nil ⇒ 前端标「未探测」，绝不拿 1M/64k 这类猜测值冒充上游声明（R49 同口径）。
-		d, err := custom.Discover(req)
-		var caps []custom.ModelCap
-		if d != nil {
-			caps = d.Caps
-		}
-		ids := make([]string, 0, len(caps))
-		for _, c := range caps {
-			ids = append(ids, c.ID)
-		}
-		resp := map[string]any{"models": ids, "caps": caps} // models 保持旧形状 []string，不破既有契约
-		if d != nil {
-			resp["base_url"], resp["adjusted"] = d.Base, d.Adjusted
-			resp["renormed"], resp["models_ok"] = d.Renormed, d.ModelsOK
-			resp["chat_ok"], resp["tries"] = d.ChatOK, d.Tries
-			if d.Note != "" {
-				resp["note"] = d.Note
-			}
-		}
-		if err != nil {
-			resp["ok"], resp["error"] = false, err.Error()
-			writeJSON(w, http.StatusOK, resp)
-			return
-		}
-		resp["ok"] = true
-		writeJSON(w, http.StatusOK, resp)
-	})
-	// 面板「点击复制 api-key」：明文按需单条下发，不随渠道列表/费率接口批量返回
-	//（否则每次刷新面板都把全部 key 送进浏览器，抓包/历史里全都是）。
-	// 口径说明：自定义渠道的 key 是**用户自己填的第三方凭据**，不是本工具的上游会话 token
-	//（不变量 2 管的是后者），且本端点同其它 /api/* 一样受 cookie 会话鉴权约束（R4）。
-	// 日志只记渠道名，绝不落 key 本身。
-	mux.HandleFunc("POST /api/config/custom_channel_key", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Name string `json:"name"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			apiError(w, http.StatusBadRequest, "解析请求失败："+err.Error())
-			return
-		}
-		key := a.resolveCustomKey(req.Name)
-		if key == "" {
-			apiError(w, http.StatusNotFound, fmt.Sprintf("自定义渠道 %s 不存在或未配置 api key", req.Name))
-			return
-		}
-		log.Printf("已下发自定义渠道 %s 的 api_key 明文（面板复制）", req.Name)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "api_key": key})
 	})
 	mux.HandleFunc("POST /api/account/nickname", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -4334,25 +3439,6 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 	})
 	// 运行统计面板（web 第三个 tab）：快照 = internal/stats 引擎的实时聚合，
 	// 载荷字段与 sidecar /capi/stats 对齐（前端 PR2 已按契约轮询）。
-	mux.HandleFunc("GET /api/stats", func(w http.ResponseWriter, r *http.Request) {
-		if a.stats == nil {
-			writeJSON(w, http.StatusOK, map[string]any{"disabled": true})
-			return
-		}
-		writeJSON(w, http.StatusOK, a.stats.Snapshot(time.Now()))
-	})
-	// 请求日志（最近 N 条，默认 15；rows 形状对齐 sidecar /capi/logs）
-	mux.HandleFunc("GET /api/stats/logs", func(w http.ResponseWriter, r *http.Request) {
-		if a.stats == nil {
-			writeJSON(w, http.StatusOK, map[string]any{"rows": []any{}})
-			return
-		}
-		limit := 15
-		if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
-			limit = n
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"rows": a.stats.Logs(limit)})
-	})
 	mux.HandleFunc("POST /api/quit", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		go a.safeGo(func() { a.Quit() })
@@ -4502,8 +3588,7 @@ type feesModelRow struct {
 //   - 未在费率接口中出现的模型标记 Priced=false（前端显示 unknown + tooltip）；
 //   - 费率接口中多出的模型（models 列表中不存在）不展示，避免与 /v1/models 不一致。
 func buildFeesChannels(modelsByKind map[provider.Kind][]provider.ModelInfo,
-	pricing []provider.ModelPricing, order []provider.Kind,
-	contextWindows map[string]int64) []feesChannel {
+	pricing []provider.ModelPricing, order []provider.Kind) []feesChannel {
 	// 渠道 → (model → pricing)
 	byChannel := make(map[string]map[string]provider.ModelPricing)
 	for _, p := range pricing {
@@ -4545,7 +3630,6 @@ func buildFeesChannels(modelsByKind map[provider.Kind][]provider.ModelInfo,
 				// 可选上下文档位与 /v1/models 的 context_options 同源；
 				// 当前值取逐模型配置（key 与 /v1/models 的 id 同格式）。
 				ContextOptions: mi.ContextOptions,
-				ContextChoice:  contextWindows[k.String()+"/"+mi.ID],
 			}
 			// 思考档位同样与 /v1/models 同源：走同一个入口，
 			// 面板上看到的档位就是投影时会实际下发的档位。
@@ -4622,9 +3706,8 @@ func (a *App) FeesInfo() map[string]any {
 	}
 
 	order := feeChannelOrderWithDynamic(modelsByKind)
-	channels := buildFeesChannels(modelsByKind, pricing, order, a.cfg.Compat.ContextWindows)
+	channels := buildFeesChannels(modelsByKind, pricing, order)
 	channels = attachCatalogScopes(channels, scopes)
-	a.applyCustomFeesMeta(&channels)
 
 	a.pricingMu.Lock()
 	errMsg := a.pricingErr
@@ -4738,27 +3821,6 @@ func capSourceOf(mi provider.ModelInfo) string {
 	return ""
 }
 
-// applyCustomFeesMeta 给费率表里的自定义渠道补上接入点与脱敏 key（R119）。
-// 抽成方法而不是内联在 FeesInfo：单测要能单独证「明文没进来、脱敏串进来了」。
-// 内建渠道的 endpoint 写死在代码里，无需展示 ⇒ meta 表不命中就保持空串。
-func (a *App) applyCustomFeesMeta(channels *[]feesChannel) {
-	meta := a.customChannelFeesMeta()
-	if len(meta) == 0 {
-		return
-	}
-	for i := range *channels {
-		if m, ok := meta[(*channels)[i].Channel]; ok {
-			(*channels)[i].BaseURL = m[0]
-			(*channels)[i].APIKeyMasked = m[1]
-		}
-	}
-}
-
-// staticModelFallback 无 handler 时的渠道→静态模型表兜底。
-// app.Runtime 不带静态表（那是 server.Runtime 的字段），但**自定义渠道例外**：
-// 它的 FetchModels 是「配什么返回什么」，绝不发网络请求（R66，已有测试锁死），
-// 因此可以在此安全取回——否则启动早期/单测里费率页拿不到自定义渠道的行。
-// 内建渠道的目录接口会打上游，绝不在这里调 ⇒ 非 Custom 渠道仍返回空。
 func (a *App) staticModelFallback() map[provider.Kind][]provider.ModelInfo {
 	out := map[provider.Kind][]provider.ModelInfo{}
 	for _, rt := range a.runtimesSnapshot() {

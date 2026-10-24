@@ -42,7 +42,7 @@
 
 下表为各渠道的账号接入方式与凭据来源。查看器只读取额度与模型目录，不发起对话。
 
-| 渠道 | 模型前缀 | 接入方式 | 说明 |
+| 渠道 | 标识 | 接入方式 | 说明 |
 |------|----------|----------|------|
 | WorkBuddyCN（CodeBuddy） | `workbuddy/*` | 浏览器登录 | WorkBuddy 国内版 |
 | WorkBuddyAI | `workbuddyai/*` | 浏览器登录 | WorkBuddy 国际版，与国内版完全独立 |
@@ -143,487 +143,66 @@
 
 ### Windows
 
-1. 从 [Releases](https://github.com/rockswang/workbuddy-wild/releases) 下载 `wild-work.exe`
-2. 放到任意目录，双击启动
-3. 右下角出现 W 图标，**双击托盘图标** → 浏览器打开 Web 管理面板
-4. 在面板中点击「+ WorkBuddyCN」/「+ WorkBuddyAI」/「+ TraeWork」/「+ QoderCN」/「+ QoderCOM」/「+ 千问办公」/「+ 智谱清言」/「+ OfficeAce」添加账号
-   （OpenCodeZen 无需添加账号，启动即已就绪；Cline 无需登录流程，直接粘贴 API Key）
-5. 根据下方配置说明接入你的 AI 客户端
+1. 构建或获取 `wild-view.exe`
+2. 放到任意目录，双击启动（首次会在同级生成 `wild-view-data/`）
+3. 右下角出现托盘图标，**双击**打开 Web 管理面板
+4. 在面板中点击渠道按钮添加账号
+5. 切换到「模型列表和倍率」查看各渠道目录与倍率
 
 ### 托盘菜单
 
 - **打开主界面**：在浏览器中打开管理面板
-- **查看日志**：用记事本打开运行日志
+- **查看日志**：打开 `wild-view-data/data/app.log`
 - **退出**：退出程序
 
 ### 无头模式（Linux 服务器）
 
 ```bash
-./wild-work --no-tray
+./wild-view --no-tray
 ```
 
-启动后打印 API 地址、Key 等信息，阻塞运行，Ctrl+C 退出。
-
-## 配置 AI 客户端
-
-### 1. 获取模型列表
-
-wild-work 的 `/v1/models` 端点返回当前所有可用模型。在终端中执行：
-
-```bash
-curl -s -H "Authorization: Bearer WildWorkAPI" http://127.0.0.1:7863/v1/models
-```
-
-### 2. 配置 Pi（models.json）
-
-Pi 不支持自动拉取模型列表，需要手动编辑 `~/.pi/agent/models.json`（Windows 路径 `C:\Users\<用户名>\.pi\agent\models.json`），在 `providers` 中加入 wild-work 配置：
-
-```json
-{
-  "providers": {
-    "wild-work": {
-      "name": "wild-work",
-      "api": "openai-completions",
-      "baseUrl": "http://127.0.0.1:7863/v1",
-      "apiKey": "WildWorkAPI",
-      "models": [
-        {
-          "id": "workbuddy/auto",
-          "name": "自动路由 (WorkBuddy)",
-          "reasoning": false,
-          "input": ["text"],
-          "contextWindow": 168000,
-          "maxTokens": 32000,
-          "compat": { "maxTokensField": "max_tokens" }
-        },
-        {
-          "id": "workbuddy/deepseek-v4-pro",
-          "name": "DeepSeek V4 Pro (WorkBuddy)",
-          "reasoning": true,
-          "input": ["text"],
-          "contextWindow": 1000000,
-          "maxTokens": 50000,
-          "compat": {
-            "thinkingFormat": "deepseek",
-            "supportsReasoningEffort": true,
-            "maxTokensField": "max_tokens"
-          }
-        },
-        {
-          "id": "workbuddy/glm-5.3",
-          "name": "GLM-5.3 (WorkBuddy)",
-          "reasoning": true,
-          "input": ["text"],
-          "contextWindow": 1000000,
-          "maxTokens": 48000,
-          "compat": { "maxTokensField": "max_tokens" }
-        },
-        {
-          "id": "traework/DeepSeek-V4-Pro",
-          "name": "DeepSeek V4 Pro (TraeWork)",
-          "reasoning": true,
-          "input": ["text"],
-          "contextWindow": 1000000,
-          "maxTokens": 50000,
-          "compat": {
-            "thinkingFormat": "deepseek",
-            "supportsReasoningEffort": true,
-            "maxTokensField": "max_tokens"
-          }
-        },
-        {
-          "id": "traework/glm-5.2",
-          "name": "GLM-5.2 (TraeWork)",
-          "reasoning": true,
-          "input": ["text"],
-          "contextWindow": 1000000,
-          "maxTokens": 48000,
-          "compat": { "maxTokensField": "max_tokens" }
-        },
-        {
-          "id": "workbuddyai/deepseek-v4.1-flash",
-          "name": "DeepSeek V4.1 Flash (WorkBuddy 国际版)",
-          "reasoning": true,
-          "input": ["text", "image"],
-          "contextWindow": 1000000,
-          "maxTokens": 128000,
-          "compat": {
-            "thinkingFormat": "deepseek",
-            "supportsReasoningEffort": true,
-            "maxTokensField": "max_tokens"
-          }
-        }
-      ]
-    }
-  }
-}
-```
-
-> 上面只列出了部分常用模型，完整列表请通过 `/v1/models` 端点获取后自行添加。
-
-### 3. 其他客户端
-
-支持 OpenAI 兼容 API 的客户端均可接入：
-
-```
-Base URL: http://127.0.0.1:7863/v1
-API Key:  WildWorkAPI
-```
-
-模型 ID 需带渠道前缀：`workbuddy/<model>`、`workbuddyai/<model>`、`traework/<model>`、`traecode/<model>`、`qodercn/<model>`、`qodercom/<model>`、`qwenwork/<model>`、`monkeycode/<model>`、`raccoon/<model>`、`loomy/<model>`、`glm/<model>`、`oczen/<model>`、`cline/<model>`（旧 `qoder/<model>` 仍可用，已从界面下线）。
-
-#### Cline 免费池（`cline/*`）
-
-粘贴官方 **API Key** 即用，无需在本机安装任何 Cline 客户端：
-
-1. 打开 <https://app.cline.bot/> 并注册 Cline 账号；
-2. `Account / API Keys` → `Create API Key`；
-   Key 形如 `sk_` + 64 位十六进制，**只在创建时完整显示一次**；
-3. 面板「账号管理」→「＋ Cline」→ 粘贴 Key → 添加。
-
-```bash
-curl http://127.0.0.1:7863/v1/chat/completions \
-  -H "Authorization: Bearer WildWorkAPI" -H "Content-Type: application/json" \
-  -d '{"model":"cline-free/step-5-preview","messages":[{"role":"user","content":"你好"}]}'
-```
-
-- 可用模型：完全跟随 Cline 官方免费池动态下发（`recommended-models` 的 free 组，
-  原样透传，不做任何本地筛选）。**模型 ID 就是上游 ID**（自带 `cline-free/` 命名空间），
-  典型如 `cline-free/step-5-preview`、`cline-free/mimo-v2.6-flash`；
-  完整清单见 `/v1/models` 中 `cline-free/` 开头的条目。
-  旧版双层写法 `cline/cline-free/*` 仍可路由（兼容老配置），但对外只广告前者。
-- **必须使用多个独立 Cline 账号各自的 Key**：官方免费额度按**账号**计
-  （其权益字段名为 `…UsageCostUSDPerUser`），**同一账号建多把 Key 共享一份额度，不会翻倍**。
-  面板在检测到新 Key 与已有账号同属一个 Cline 账号时会给出提示。
-- Key **不过期、不轮换**，也不会与浏览器 / 官方客户端互相挤下线（这是选 API Key 而不是
-  逆向 OAuth 登录的主要原因）。
-- 本渠道**只暴露官方免费池**（`cline-free` 命名空间）：订阅池 `cline-pass` 与云池 `cline-cloud`
-  不在使用范围内（请求它们会得到 `ENTITLEMENT_ERROR`）。上游无余额/额度查询接口，
-  因此积分显示「不适用」，实际花费见「用量与流水」（来自逐请求 `usage.cost`）。
-- 不做价格承诺：官方「free」标记与实际计价并不一致（实测同前缀有扣费、
-  非 free 后缀反倒 `cost=0`，且同一模型相邻两次请求计价可能漂移），
-  一切以实测 `usage.cost` 为准。
-- 免费池的上游限流（OpenRouter 侧 `limit_rpd` 日限 / 临时限流）属**共享出口**，
-  与你的账号数无关：本渠道对此只做模型级冷却，不会因此惩罚或轮换账号。
-
-#### OpenCodeZen 匿名免费模型（`oczen/*`）
-
-无需任何账号或登录，直接可用（免费清单由上游动态下发，随时增删）：
-
-```bash
-curl http://127.0.0.1:7863/v1/chat/completions \
-  -H "Authorization: Bearer WildWorkAPI" -H "Content-Type: application/json" \
-  -d '{"model":"oczen/mimo-v2.6-flash-free","messages":[{"role":"user","content":"你好"}]}'
-```
-
-- 常见可用：`oczen/big-pickle`、`oczen/mimo-v2.6-flash-free`、`oczen/mimo-v2.5-free`、
-  `oczen/nemotron-3-ultra-free`、`oczen/nemotron-3.5-lightning-free`、`oczen/ling-3.0-flash-fin-free`；
-  完整清单见 `/v1/models` 中 `oczen/` 开头的条目。
-- 部分免费模型有**地域限制**（如 `muse-spark-*-contributor-free` 在国内直连返回 403 RegionError）：
-  列表仍会列出。本工具的**备用上游通道**就是为这类场景准备的（见下文设置章节），
-  但该渠道上游对抗策略变更、当前暂不可用，待恢复后再接入自动改道。
-- Cline 的 `cline-free/muse-spark-1.3-contributor` 已接入自动改道：国内直连回 403
-  `not available in your region` 时，会在同一次请求内经备用通道重发（未配则原样透传）。
-- 免费额度/限流由上游 OpenCode Zen 控制，本工具不做额外限制；上游未见请求数配额，
-  但高并发时延会上升。
-
-### 4. 三种接口协议
-
-除 OpenAI Chat Completions 外，同一端口还兼容 **OpenAI Responses** 与 **Anthropic Messages**，
-可用官方 CLI 直接接入（无需改代码）：
-
-| 端点 | 协议 | 适用客户端 |
-|------|------|-----------|
-| `POST /v1/chat/completions` | OpenAI Chat | 大多数第三方客户端、`openai` SDK |
-| `POST /v1/responses` | OpenAI Responses | `codex` CLI、`openai` SDK 的 Responses API |
-| `POST /v1/messages` | Anthropic Messages | `claude` CLI、`anthropic` SDK |
-| `POST /v1/messages/count_tokens` | Anthropic count_tokens | Claude Code 上下文预算用 |
-
-鉴权：OpenAI 侧用 `Authorization: Bearer <API Key>`；Anthropic 侧 `x-api-key: <API Key>`
-或 `Authorization: Bearer` 均可。
-
-**模型名可省略渠道前缀**，在 `config.json` 的 `compat` 段配置映射：
-
-```json
-"compat": {
-  "default_channel": "workbuddy",
-  "max_tokens_cap": 32000,
-  "model_map": {
-    "claude-*": "workbuddy/glm-5.2",
-    "gpt-5*": "workbuddy/deepseek-v4-pro"
-  }
-}
-```
-
-- 带 `channel/` 前缀的模型名始终优先（如 `workbuddy/hy3`），行为与旧版一致
-- 无前缀时依次尝试：`model_map` 精确匹配 → 通配匹配（key 以 `*` 结尾）→ `default_channel`
-- `max_tokens_cap` 用于封顶客户端的 `max_tokens`（Anthropic 客户端常发 64000，
-  超出部分上游会直接 400）；设 `0` 表示不限制
-
-**Codex CLI 配置示例**（`~/.codex/config.toml`）：
-
-```toml
-model = "traework/glm-5.2"
-model_provider = "wildwork"
-
-[model_providers.wildwork]
-name = "wildwork"
-base_url = "http://127.0.0.1:7863/v1"
-wire_api = "responses"
-env_key = "WILDWORK_KEY"
-```
-
-**Claude Code 配置示例**（环境变量）：
-
-```bash
-export ANTHROPIC_BASE_URL="http://127.0.0.1:7863"
-export ANTHROPIC_AUTH_TOKEN="WildWorkAPI"
-export ANTHROPIC_MODEL="traework/glm-5.2"
-```
-
-> ⚠️ **已知限制**：Responses 接口是无状态实现，不支持 `previous_response_id`
-> （会返回 400 并提示）。客户端需在 `input` 中携带完整历史（Codex CLI 默认如此）。
-> 另外 WorkBuddy 国内版/国际版上游对某些 agent 系统提示词（如 Codex CLI 自带的那份）
-> 会触发内容策略拦截（上游返回 `code=11128 Illegal API invocation from an unapproved channel`），
-> 网关已对已知模板句（Codex CLI、DeepSeek Harness 身份句等）做等价改写绕过，
-> 见 `internal/sanitize`；如仍遇拦截请更换渠道模型。
->
-> 📸 **图片相关（已自动处理，无需配置）**：
-> - 工具结果里的截图（Codex `view_image`）走 vision 通道，**不会**变成 base64 文本；
-> - 内联 base64 图片在转发前降采样到长边 ≤1568（JPEG q85，透明图走 PNG），
->   典型 12 张 2048px 截图的会话请求体由 33MiB 降到 4MiB；
-> - 入站请求体上限默认 **128MiB**，可用 `config.json` 的 `server.max_request_body_mb` 调整
->   （钳 8~1024）；超限返回 413 并提示实际限额。
-
-### 5. 生图 API（OpenAI Images 兼容，glm 渠道）
-
-同一端口提供 OpenAI Images API 兼容端点，由 glm（智谱清言）渠道承载，**不依赖其它渠道**：
-
-| 端点 | 用途 | 说明 |
-|------|------|------|
-| `POST /v1/images/generations` | 文生图 | 一次上游固定产 4 图，`n` ≤ 4 取前 N 张；12~15s |
-| `POST /v1/images/edits` | 参考图改图 | 多参考图自动拼版托管；输出比例**跟随输入图** |
-
-鉴权与 Chat 相同（`Authorization: Bearer <API Key>`）。
-`model` 字段可省略或任意填写（服务端忽略，固定走 glm 画图通道；不换模型、不做请求内换号）。
-
-#### 文生图
-
-```bash
-curl -X POST "http://127.0.0.1:7863/v1/images/generations" \
-  -H "Authorization: Bearer WildWorkAPI" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "glm/image",
-    "prompt": "鲸系女仆立绘，蓝白渐变长发，手持一碗米饭",
-    "n": 1,
-    "size": "1024x1024"
-  }'
-```
-
-- `size` 支持 OpenAI 尺寸与裸比例两种写法：`1024x1024` / `864x1152` / `1152x864` /
-  `720x1280` / `1280x720`，或 `1:1` / `3:4` / `4:3` / `9:16` / `16:9`（也可 `auto`）。
-  **其它值一律 400**——上游对非法比例会静默降级为 1:1，本层直接拦截；
-- `response_format` 默认 `b64_json`（产物 CDN 直链会过期，服务端下载后内联返回）；
-  传 `"url"` 则返回直链（过期失效，需自取自存）；
-- 响应结构与 OpenAI 一致：`{"created": …, "data": [{"b64_json": …, "revised_prompt": …}]}`。
-
-#### 参考图改图
-
-双形态入参：
-
-- **multipart**（OpenAI 官方 SDK 形状）：文件字段 `image`（可重复，也接受 `image[]`），
-  另有 `prompt`、`output_format`（`png` 时产物真转 PNG——上游原生产 JPEG）；
-- **JSON**：`{"prompt": "…", "image": ["https://… | data:image/png;base64,…"]}`。
-
-```bash
-curl -X POST "http://127.0.0.1:7863/v1/images/edits" \
-  -H "Authorization: Bearer WildWorkAPI" \
-  -F "prompt=给这个角色换上红色围巾，保持立绘风格" \
-  -F "image=@./character.webp" \
-  -F "output_format=png"
-```
-
-- 单张 `http(s)` URL 参考图直接透传上游（不过图床，链路最短）；
-  本地文件 / base64 / 多图则自动**拼版**（referenceN 标注）+ 图床托管，对调用方透明；
-- 产物默认下载转 `b64_json`（下载失败时回退 `url` 直链）；`output_format=png` 可让
-  产物真转 PNG（上游原生产 JPEG）；请求的 `size` 被忽略——
-  **输出比例跟随输入图**（`aspect_ratio` 对 edits 无效，实证）。
-
-#### 限制与注意
-
-- 生图依赖 glm 渠道账号池；402/限流等按 glm 模型级冷却处理，下一次请求自动换号；
-- **产物不自动删除**，走图床的参考图会上传到第三方图床（含隐私提示，敏感图勿用）；
-- edits 的多图拼版出图效果以双人设定集定性验证过，任意 N 张未全量验证。
-
-### 6. Jev 结构化决策端点（`/v1/systemone`）
-
-OpenCode Zen 上还有一个免费的结构化决策模型 **Jev（`jev-1.13-free`）**。
-它不是聊天模型——不能调 `/v1/chat/completions`（会 500），只能通过专用端点调用。
-本网关在 `POST /v1/systemone` 直接透传，用法：
-
-```bash
-curl -X POST "http://127.0.0.1:7863/v1/systemone" \
-  -H "Authorization: Bearer WildWorkAPI" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "state": "用户反馈：我被重复扣费了，订单号 A-104，要求今天退款。",
-    "questions": {
-      "refund":  {"type": "noul",   "criteria": {"true": "要求退款", "false": "未提及退款"}},
-      "team":    {"type": "choice", "criteria": {"billing": "支付/发票/退款", "technical": "Bug/故障", "other": "以上都不是"}},
-      "urgency": {"type": "score",  "criteria": ["低（不紧急）", "中（今天内）", "高（立即处理）"]}
-    }
-  }'
-```
-
-#### 三种问题类型
-
-| 类型 | 问什么 | 返回 | 类比代码 |
-|------|--------|------|----------|
-| **noul** | 这是不是 X？ | 0~1 的概率 | `if (isX(state))` |
-| **choice** | 这是哪个？ | 每个选项的概率 + 最佳选择 | `switch (classify(state))` |
-| **score** | 这几分？ | 0~(N-1) 等级分 + 概率分布 | `scoring(state)` |
-
-#### 响应示例
-
-```json
-{
-  "model": "jev-1.13-free",
-  "answers": {
-    "refund":  {"type": "noul",   "noul": 0.92},
-    "team":    {"type": "choice", "choice": "billing", "confidence": 1, "probabilities": {"billing":1,"technical":0,"other":0}},
-    "urgency": {"type": "score",  "score": 1.83, "confidence": 0.74,
-                "legend": {"0":"低","1":"中","2":"高"}, "probabilities": {"0":0,"1":0.17,"2":0.83}}
-  },
-  "usage": {"input_tokens": 444, "output_tokens": 69},
-  "cost": "0"
-}
-```
-
-#### 关键限制
-
-- **必须带 `criteria` 字段**——`noul` 用 dict `{"true":"…","false":"…"}`，`choice` 用 dict（每个选项的判断标准），`score` 用 list（与级别对齐的描述）
-- `state` 文本约 32k token 预算（state + questions 共享），英文最强，数学/日期/十六进制请交给代码
-- `choice` 最多 255 个选项，`score` 2~10 级
-- **免费**：`cost:"0"`，实测 0.5~1.3s 完成决策
-- 也可直连上游：`POST https://opencode.ai/inference/v1/systemone` + `Authorization: Bearer public` + OpenCode 伪装头，但本网关已帮你处理了鉴权与伪装
-
-> **别拿它当 GPT 用**——把它当成"语义判断 API"：给它状态和选择题，它回概率和置信度，你的代码根据 typed 值做后续决策。
+启动后打印面板地址，阻塞运行，Ctrl+C 退出。
 
 ## 面板操作指南
 
-所有操作在 Web 管理面板中完成，按直觉操作即可：
-
-- **添加账号**：点击渠道按钮 → 确认对话框 → 浏览器窗口登录 → 自动完成
-  （「＋ MonkeyCode」是**导入**按钮：读取本机已登录客户端的凭据，不需要浏览器登录）
-  （「＋ 小浣熊」主按钮走**网页版自动登录**：拉起一个独立浏览器窗口，登录后自动捕获凭据；
-  次按钮「从客户端导入」则读取本机已登录客户端的凭据，不需要浏览器登录）
-  （「＋ Loomy」是**导入**按钮：读取本机已登录客户端的凭据，不需要浏览器登录）
-  （「＋ OfficeAce」主按钮走**自助 OAuth**：拉起华为云授权页，登录后自动捕获凭据；
-  次按钮「从客户端导入」则读取本机已登录 OfficeAce 桌面端的凭据（临时 AK/SK 经 DPAPI 解密，仅 Windows），
-  不需要浏览器登录）
-  - ⚠️ **OfficeAce 关于登录态互踢**：上游刷新时会轮换 refresh_token，若同一账号的凭据被本工具与 OfficeAce 桌面端**共用**，
-  两边会争抢同一个 refresh_token。要两边同时用，请用「浏览器登录」在本工具**单独登录一次**（新建独立链路），而不是从桌面端导入。
-  - ⚠️ **OfficeAce 关于平台限制**：**浏览器登录（自助 OAuth）跨平台**（纯 HTTP + 系统浏览器）；
-  而「从客户端导入」的加密档案解密依赖 **Windows DPAPI**，仅 Windows 可用。
-  两条路径的对话都不受影响（网关 Basic 凭据不过期），但非 Windows 下若不走自助登录，积分/签到会降级。
-  - ⚠️ **关于小浣熊登录态互踢**：上游刷新时会轮换 refresh_token，若同一账号的凭据被本工具与浏览器 / 官方客户端**共用**，
-  两边会争抢同一个 refresh_token，可能出现其中一侧被挤下线。要两边同时用，请用「网页版登录」在独立浏览器窗口里**单独登录一次**
-  （本流程新建独立会话），而不是从浏览器复制凭据粘进来。
-  - ⚠️ **平台限制**：MonkeyCode / 小浣熊 / Loomy 的「从客户端导入」路径探测**跨平台**（用标准用户目录 / 环境变量定位客户端凭据，macOS / Linux 上客户端把配置写在标准位置即可命中，找不到则返回明确报错）。小浣熊的**网页版自动登录同样跨平台**（纯 HTTP + 系统 Edge/Chrome，不依赖注册表）；小浣熊 / Loomy 官方另有 macOS / Linux 客户端，MonkeyCode 客户端则仅发布过 Windows 版（其导入在非 Windows 仍会按上述口径尽力而为）。其余渠道（WorkBuddy 系 / Trae 系 / Qoder 系 / 千问办公 / 智谱清言 / Cline）跨平台可用（Cline 是纯 HTTP + 官方 API Key，不依赖本机客户端，天然跨平台）。
-- **账号管理**：卡片显示积分、签到状态（WorkBuddy 国际版显示「自动领日活奖励」）；图标按钮操作（签到 ✓ / 刷新 ↻ / 停用 ⏸ / 删除 ✕）
-  - **修改显示名**：点击卡片上的账号名即可修改，用于给账号起好认的别名
-  - 账号按固定渠道序展示：OpenCodeZen → WorkBuddyCN → WorkBuddyAI → QoderCN → QoderCOM → TraeWork → 千问办公 → 智谱清言 → Cline → MonkeyCode → 小浣熊 → Loomy
-  - 积分显示为「可用积分」；若该账号还有本工具用不了的额度（如 TraeWork 官方客户端专用池），会追加显示 `/ N 不可用`
-- **积分明细**：鼠标悬停积分数字显示套餐明细（含有效期与可用/不可用小计），条目多时用底部 `‹ ›` 翻页
-- **刷新积分**：面板顶部按钮，批量刷新全部账号余额
-- **模型列表和费率**（第四 tab）：点击「刷新」从上游拉取最新模型定价；上游未返回定价的模型显示 `unknown`，免费模型高亮为 `Free`
-- **自定义渠道（任意 OpenAI 兼容 API）**：主面板「＋ 渠道」或渠道行的「编辑」弹窗里填 *渠道标识 / 接入点 / API Key* 即可接入：
-  - 接入点**可以随便粘**——带 `/chat/completions`、`/completions`、`/models` 尾巴，或漏了 `http(s)://`，保存时都会被规范化成 API 根
-    （内网地址默认 `http`，公网默认 `https`）；`🔍 识别端点` 会在候选根里做**有界嗅探**（最多 3 个根，只 GET 不 POST）确认真实端点，
-    并把结果回填输入框；定位失败会**逐条列出试过哪几个地址、各回什么**，不是一句「连接失败」。
-  - 「＋ 模型」是一个两页签面板：*上游列表*（拉一次 `/models`，逐行点行尾 `＋`/`－` 加入或移除，已添加的行可「更新能力」把旧值洗成上游真值）
-    与 *手动添加 / 编辑*（不打上游）。上游没声明的能力标为**未探测**，本工具**不编造默认值**，需要就手填。
-  - 渠道标识**可以改**（改完旧前缀模型立即失效、历史用量流水仍记旧名，弹窗会先列出代价）。
-  - API Key 常态显示**脱敏串**（`长头****短尾`）；点行上的 key 或编辑框旁的 👁 才向后端**单条**取原文（复制进剪贴板 / 短暂显示，关窗即清）。
-  - 费率页每个自定义渠道的接入点行后有 **`显示全部模型`** 开关：打开才现拉一次上游目录（未添加的标「未添加」），**只看不写盘**，要哪个仍回「＋ 模型」里点 `＋`。
-  - 「关闭」按钮**带保存语义**：有改动会先落盘并热生效，保存失败则不关窗。
-- **设置（统一配置入口）**：点击顶栏右侧 ⚙ 齿轮按钮，包含：
-  - *接口与鉴权*：API 监听地址（`127.0.0.1` / `0.0.0.0` / 自定义 + 端口）、API-Key（给 AI 客户端）、
-    **管理密码**（给面板登录；与 API-Key 是两套凭据）
-  - *自动签到与开机自启*：签到时间多组增删、开机自启开关
-  - *模型路由*：默认渠道、封顶 tokens、CC/Codex 客户端模型名映射表（`claude-* = workbuddy/glm-5.2` 形式，支持通配）
-  - *备用上游通道*：全局只配**一个**代理地址（`http://` / `https://` / `socks5://`），留空 = 关闭。
-    它**不影响任何常规请求**（所有渠道一律直连）；只有上游回「地区限制」时，本工具才在
-    同一次请求内自动改走该通道重发一次，重发也失败则透传原始错误（不拿第二次尝试的错误掩盖首因）。
-    目前取用方：Cline 与 OpenCodeZen（两渠道的部分模型直连会被上游按地域拒，如 cline-free/muse-spark 系）。
-    命中的模型会被「学会」，后续 6 小时内不再白撞直连；改/清代理地址则学习结果立即作废。
-    同处还可为 OpenCodeZen 填入自定义 API key（`sk-…`，留空用匿名凭证 `public`；
-    自定义 key 有独立配额不受匿名限流影响，且可调用付费模型——需账户余额）。
-    > 旧版「每个渠道单独配代理」已整体下线：除 cline 外的渠道不再支持代理，一律直连。
-
-> 顶栏的 API 地址 / API-Key 文本框点击复制；所有配置修改统一走 ⚙ 设置弹层。
+- **添加账号**：点击渠道按钮 → 确认对话框 → 浏览器完成登录；带「从客户端导入」的渠道可读取本机已登录客户端的凭据。
+- **账号管理**：卡片显示积分/Token、额度单位、签到状态；图标按钮为签到 ✓ / 刷新 ↻ / 删除 ✕。
+  点击账号名可直接修改显示名。
+- **积分明细**：鼠标悬停积分数字查看套餐明细（有效期、可用/不可用小计），条目多时用底部 `‹ ›` 翻页。
+- **刷新积分**：面板顶部按钮，批量刷新全部账号余额；单账号失败不影响其他账号。
+- **模型列表和倍率**：按渠道分页展示，每个渠道上方标出各账号的查询状态（已同步 / 待刷新 / 失败）。
+  同一模型在不同账号倍率不同时会逐账号列出；上游未返回定价显示 `unknown`，只有显式 0 才显示 `Free`。
+- **余额变化**：用量页上半部分是每次查询成功时的实际余额曲线，下半部分是积分流水（入项/消耗/到期）。
+  两者口径不同：曲线是绝对值，下降可能来自消耗、到期或套餐回收。
+- **设置**：顶栏齿轮，包含监听地址、管理密码、纯签到开关与签到时间、临期阈值、开机自启。
 
 ### 面板登录（监听非 127.0.0.1 时）
 
-- 监听 `127.0.0.1` 时面板默认不鉴权（只有本机能访问，无需打扰）。
-- 监听 `0.0.0.0` 或具体网卡 IP 时**必须设置管理密码**（`config.json` 的 `admin_password`，或面板设置里的「管理密码」）：
-  未设置时程序拒绝启动（日志/消息框提示），面板保存监听地址时也会拒绝并提示。
-- 设置弹层中选 `127.0.0.1` 时不显示警告；改成其它地址时会实时出现黄色警示条，
-  且「管理密码」label 后带红色 `*` 表示必填。
-- 登录后下发 HttpOnly cookie（有效期 7 天，使用中自动续期，跨站请求受 SameSite 保护）；
-  密码连续错误 5 次锁定该来源 IP 5 分钟；改密码后所有已登录会话立即失效。
-- OpenAI/兼容接口的鉴权不受影响，仍用 `api_key`（两套凭据相互独立）。
-- 也可用环境变量 `WILDWORK_ADMIN_PASSWORD` 配置（优先级高于 `config.json`）。
+监听非环回地址时必须设置管理密码，否则任何人可打开面板。面板会话使用 HttpOnly cookie，改密码后旧会话立即失效。
 
 ## 常见问题
 
 ### 1. Windows 提示“未知发布者”或报毒？
 
-本工具没有数字签名，因此可能会被 Windows 安全中心或杀毒软件拦截。如果报毒，请将本工具添加到排除项，方法如下：
+未签名的 Go 单文件程序常见误报，可核对发布页的 SHA256 后放行。
 
->设置 → 更新和安全 → Windows 安全中心 → 打开 Windows 安全中心 → 病毒和威胁防护 → “病毒和威胁防护”设置/管理设置 → 排除项/添加或删除排除项 → 添加排除项（文件或文件夹），把 exe 或所在目录加进去。
+### 2. 为什么看不到 API 地址和 API-Key？
 
-如果对本仓库发布包不放心，可以克隆到本地让 Agent 帮你审查一遍，然后自行基于源码构建（见 [DEVELOPMENT.md](DEVELOPMENT.md)）。
+本程序不提供会话转发，`/v1/*` 一律 404，因此没有 API 地址与 API-Key 配置。
 
-### 2. 小浣熊在 macOS / Linux 上能用吗？
+### 3. 积分显示为 0 或待刷新？
 
-可以。小浣熊官方有 macOS / Linux / 银河麒麟客户端（不止 Windows），本工具的「从客户端导入」路径探测
-**本身跨平台**——用标准用户目录 / 环境变量定位客户端凭据（`~/.box-agent/config/auth.json`，或
-`BOX_AGENT_CONFIG_DIR` 覆盖），客户端把配置写在标准位置即可命中；同时从客户端读到的活凭证也用于
-运行时自愈（客户端续期会轮换 token，本工具会从同一个会话文件自动取新 token，无需重新导入）。
+- 首次启动尚未完成查询：点「刷新积分」。
+- 该渠道额度接口不支持或需要重新登录：卡片上会显示失败原因。
+- 渠道本身没有积分概念（如 Cline、匿名通道）：显示「不适用」。
 
-> 小浣熊的**网页版自动登录跨平台**：它拉起系统已装的 Edge/Chrome（独立 profile）完成网页登录，
-> 再经 CDP 捕获凭据，不依赖 Windows 注册表。若机器上没有 Edge/Chrome，可改用「从客户端导入」路径。
->
-> 注：MonkeyCode 客户端仅发布过 Windows 版；Loomy 客户端配置目录为 Windows 专用路径，其导入在
-> 非 Windows 上按尽力而为处理，找不到凭证时返回明确报错。
+### 4. 为什么签到按钮是灰的？
 
-### 3. 如何绑定多个 WorkBuddy 国际版账号？
+纯签到默认关闭，需在设置中开启；另外依赖对话才能完成的签到（WorkBuddy 国际版、智谱清言）不提供入口。
 
-添加新账号时，因为默认使用当前已登录的 github/Google 等账号自动登录，因此无法快速添加新的账号。
-这里给出我的方案，在浏览器右上角菜单选择“新建无痕窗口”，在窗口地址栏输入`http://127.0.0.1:7863`打开 WildWork 主界面，即可在干净环境内新增账号。
-也可以打开开发者控制台，单独清除 github.com 和 workbuddy.ai 的 Cookies。
+### 5. 可以和 wild-work 同时运行吗？
 
-### 4. WorkBuddy 国际版登录后积分显示为0，刷新积分报错
-注册 WorkBuddy 国际版新账号时，需要选择地区后奖励积分才发放。
-
-### 5. 小浣熊的「签到」是怎么回事？
-
-小浣熊**没有**独立的签到/领取端点，它的每日 300 积分是**惰性落账**的：
-
-- 名义记账时间是当天 00:00（积分流水里显示 `grant_at`）；
-- **实际入账**要等账号当天第一次访问「工作台」接口才发生（流水里的 `created_at`）——
-  也就是网页端文案说的「当天**登录**后有效期延长至 7 天」。
-
-本工具的签到就是替你做这次访问（调网页端打开首页时自己也会调的 `setting_info`），
-所以：
-
-- **定时签到**：按面板「签到时间」自动执行，当天积分即时到账；
-- **手动签到**：账号卡片上的 ✓ 按钮同样有效（当天已领过时返回「今日已领取」，不会重复发放）；
-- 如果你平时会打开小浣熊网页/客户端，积分本来也会到账；本工具的签到保证**即使一天都不打开**也不漏领。
-
-> 注：纯对话、查余额、刷新 token 都**不会**触发这个落账，只有工作台接口算「当天登录」。
+可以，但必须使用各自的数据目录，且不要并发管理同一份复制凭据（refresh token 会互相轮换失效）。
 
 ## ⚠️ 风险警告与免责声明
 

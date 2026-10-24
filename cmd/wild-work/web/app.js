@@ -584,17 +584,13 @@ function renderAccounts() {
       : (noCheckin ? `<span class="tag neutral" title="${esc(noCheckinTitle)}">${noCheckinText(a.group)}</span>` : '<span class="tag neutral">未签到</span>');
 
     const disabledClass = a.disabled ? " disabled" : "";
-    const disableIcon = a.disabled ? "▶" : "⏸";
-    const disableTitle = a.disabled ? "启用" : "停用";
 
     // 冷却标签（后端 pool.Status 已透出 cooling/until/reason，此前前端未渲染）。
     // 为什么需要：账号被冷却时挑号会跳过它，表现为「积分明明很多却报 503/上游限流」，
     // 而卡片上毫无提示——用户只能靠猜。这里把「冷却到几点 + 原因」直接摆出来。
     // until 由后端 fmtTime 预格式化为 "01-02 15:04"，为空则退化为「冷却中」。
-    const coolingTag = a.cooling
-      ? `<span class="tag warn" title="${esc(a.reason || "冷却中")}">冷却至 ${esc(a.until || "-")}</span>`
-      : "";
-    const coolingClass = a.cooling ? " cooling" : "";
+    const coolingTag = "";
+    const coolingClass = "";
     const checkinBtn = noCheckin
       ? `<span class="icon-op off" title="${esc(noCheckinTitle)}" onclick="return false">✓</span>`
       : `<span class="icon-op" title="签到" onclick="checkin('${a.uid}')">✓</span>`;
@@ -613,7 +609,6 @@ function renderAccounts() {
       ? `${oczenHelp}<span class="icon-op off" title="固定账号，不可停用/删除" onclick="return false">🔒</span>`
       : `${checkinBtn}
           ${noCredits ? "" : `<span class="icon-op" title="刷新积分" onclick="refreshOne('${a.uid}')">↻</span>`}
-          <span class="icon-op warn" title="${disableTitle}" onclick="toggleDisable('${a.uid}',${a.disabled})">${disableIcon}</span>
           <span class="icon-op danger" title="${isCustomGroup(a.group) ? esc("删除账号（自定义渠道将移除整个渠道配置）") : "删除账号"}" onclick="removeAcct('${a.uid}')">✕</span>`;
     // 显示名：点击直接弹出改名框（固定账号不可改，降级为普通文本）。
     // oczen 特例：渠道名已由 badge 承担，名字按凭证形态显示「匿名/私有Key」。
@@ -686,48 +681,6 @@ function renderFees(fees) {
   const ctxTag = (m) => {
     if (!m || !m.has_context || !m.context_window) return "";
     return ` <span class="ctx-tag" title="上下文窗口：${fmtTokens(m.context_window)} tokens">(${fmtTokens(m.context_window)})</span>`;
-  };
-
-  // 上下文档位选择：仅上游声明了可选档位的模型展示（Qoder 的 context_config）。
-  // 选定值随请求下发（就近取不超过它的最高档），未选则用上游默认档。
-  const ctxPicker = (channel, m) => {
-    if (!m || !m.context_options || m.context_options.length === 0) return "";
-    const cur = m.context_choice || 0;
-    const opts = [`<option value="0"${cur === 0 ? " selected" : ""}>默认</option>`]
-      .concat(m.context_options.map(n =>
-        `<option value="${n}"${n === cur ? " selected" : ""}>${fmtTokens(n)}</option>`));
-    return `<select class="ctx-pick" data-model="${esc(channel + "/" + m.model)}" title="上下文窗口">${opts.join("")}</select>`;
-  };
-
-  // 能力文字摘要，拼进模型 tooltip。
-  // 措辞说明：上游模型列表接口未声明某能力时，本工具不自行断言其「不支持」，
-  // 只说「未声明」——避免把缺失信息当成否定结论。
-  const capText = (m) => {
-    if (!m) return null;
-    const yes = [], unknown = [];
-    (m.supports_images ? yes : unknown).push("图像输入");
-    (m.supports_reasoning ? yes : unknown).push("思考模式");
-    const parts = [];
-    if (yes.length) parts.push(`支持：${yes.join("、")}`);
-    if (unknown.length) parts.push(`上游未声明：${unknown.join("、")}`);
-    return parts.join("；");
-  };
-
-  // 模型 id 的 tooltip：首行给客户端要填的完整模型 ID（渠道前缀 + 模型名），
-  // 用户可直接照抄；能拿到上下文则展示，否则明确说未知。
-  const modelTip = (channel, m) => {
-    const parts = [`调用 ID：${chPrefix(channel)}${m.model}`];
-    if (m.has_context && m.context_window) {
-      parts.push(`上下文窗口：${fmtTokens(m.context_window)}`);
-      if (m.max_tokens) parts.push(`最大输出：${fmtTokens(m.max_tokens)}`);
-    } else {
-      parts.push("上下文窗口：未知");
-      parts.push("最大输出：未知");
-      parts.push("（上游未提供该信息）");
-    }
-    const ct = capText(m);
-    if (ct) parts.push(ct);
-    return parts.join("\n");
   };
 
   // 单行倍率单元格。同一模型在不同账号上倍率不同时，额外展开「按账号」明细：
@@ -809,8 +762,8 @@ function renderFees(fees) {
     for (let i = 0; i < models.length; i += 2) {
       const m1 = models[i];
       const m2 = models[i + 1];
-      const id1 = m1 ? `<code title="${esc(modelTip(ch.channel, m1))}">${esc(m1.model)}</code>${ctxTag(m1)}${capIcons(m1)}${noteCell(m1)}${ctxPicker(ch.channel, m1)}` : "";
-      const id2 = m2 ? `<code title="${esc(modelTip(ch.channel, m2))}">${esc(m2.model)}</code>${ctxTag(m2)}${capIcons(m2)}${noteCell(m2)}${ctxPicker(ch.channel, m2)}` : "";
+      const id1 = m1 ? `<code title="${esc(modelTip(ch.channel, m1))}">${esc(m1.model)}</code>${ctxTag(m1)}${capIcons(m1)}${noteCell(m1)}` : "";
+      const id2 = m2 ? `<code title="${esc(modelTip(ch.channel, m2))}">${esc(m2.model)}</code>${ctxTag(m2)}${capIcons(m2)}${noteCell(m2)}` : "";
       html += `<tr><td>${id1}</td><td>${rateCell(m1)}</td><td>${id2}</td><td>${rateCell(m2)}</td></tr>`;
     }
     html += `</tbody></table></div>`;
@@ -818,16 +771,6 @@ function renderFees(fees) {
 
   html += `<div class="note" style="margin-top:8px">${esc(fees.disclaimer || "")}</div>`;
   box.innerHTML = html;
-
-  box.querySelectorAll(".ctx-pick").forEach((sel) => {
-    sel.onchange = async () => {
-      try {
-        await api("/api/config/context_window", { model: sel.dataset.model, window: parseInt(sel.value, 10) || 0 });
-        toast("上下文窗口已更新");
-      } catch (e) { toast(e.message); }
-      loadFees();
-    };
-  });
 }
 
 // bindFeesTabs 费率渠道标签点击切换（事件委托，绑定一次）。
@@ -875,17 +818,6 @@ async function refreshOne(uid) {
     delete detailCache[uid]; // 顶层已更新，旧明细缓存须作废，否则「新顶层+旧弹层」
     loadState();
   } catch (e) { toast(e.message); }
-}
-
-async function toggleDisable(uid, currentlyDisabled) {
-  const action = currentlyDisabled ? "启用" : "停用";
-  confirmDialog(`确定${action}该账号？${currentlyDisabled ? "" : "停用后路由不会分配给该账号。"}`, async () => {
-    try {
-      await api("/api/account/disable", { uid, disabled: !currentlyDisabled });
-      toast(`账号已${action}`);
-      loadState();
-    } catch (e) { toast(e.message); }
-  });
 }
 
 function removeAcct(uid) {

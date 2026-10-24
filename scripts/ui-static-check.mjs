@@ -120,20 +120,12 @@ const T = globalThis.__T;
 const results = [];
 const check = (name, pass, extra = "") => results.push([name, pass, extra]);
 
-// ---- 场景 1：账号卡片的冷却可见性 ----
+// ---- 场景 1：账号卡片渲染（查看器不再展示路由冷却/停用状态） ----
 T.renderAccounts();
 const cards = document.getElementById("acctList").innerHTML;
-check("冷却标签出现（冷却至 …）", /冷却至/.test(cards));
-check("冷却时间正确显示", cards.includes("10-03 09:12"));
-check("冷却原因进 title（含 3004）", cards.includes("3004"));
-check("冷却卡片带 cooling 类（左侧琥珀边）", /acct-card cooling/.test(cards));
-check("冷却标签用 warn 样式", /tag warn/.test(cards));
-check(
-  "只有冷却账号带冷却标签（健康号不带）",
-  (cards.match(/冷却至/g) || []).length === 1,
-  `实际 ${(cards.match(/冷却至/g) || []).length} 个`
-);
+check("账号卡片已渲染", cards.length > 0);
 check("健康号仍在（未被过滤）", cards.includes("健康号"));
+check("不再渲染路由冷却标签", !/冷却至/.test(cards));
 
 // ---- 场景 2：渠道汇总条 ----
 T.renderSummary();

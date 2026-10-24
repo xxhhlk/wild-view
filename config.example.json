@@ -3,48 +3,21 @@
     "host": "127.0.0.1",
     "port": 7864
   },
-  "api_key": "WildWorkAPI",
   "admin_password": "",
   "auth_dir": "./auths",
   "state_file": "./data/state.json",
   "region": "cn",
-  "cooldown": {
-    "hard_credit": "12h",
-    "soft_rate": "60s",
-    "err_threshold": 3,
-    "err_cooldown": "10m"
-  },
   "schedule": {
     "checkin_times": ["09:00", "21:00"],
     "expiring_threshold_hours": 24
   },
   "upstream": {
-    "timeout_seconds": 120,
-    "stream_idle_seconds": 90
-  },
-  "server": {
-    "max_request_body_mb": 128
+    "timeout_seconds": 120
   },
   "login": {
     "lobsterai_callback_port": 0
   },
-  "compat": {
-    "default_channel": "workbuddy",
-    "max_tokens_cap": 32000,
-    "reasoning_effort": "",
-    "responses_reasoning_summary": "auto",
-    "deepseek_thinking": true,
-    "model_map": {
-      "claude-*": "workbuddy/glm-5.2",
-      "gpt-5*": "workbuddy/deepseek-v4-pro"
-    }
-  },
-  "backup_proxy": "",
-  "reasoning_efforts": {},
-  "model_fallback": [],
-  "custom_channels": [],
   "features": {
-    "loop_guard": true,
     "checkin_enabled": false
   }
 }
