@@ -152,7 +152,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}-dmg
-          path: dist/WildWork-*-${{ matrix.goarch }}.dmg
+          path: dist/WildView-*-${{ matrix.goarch }}.dmg
           if-no-files-found: error
 
   release:

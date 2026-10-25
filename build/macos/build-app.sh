@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把 macOS 二进制打包成可双击的 WildWork.app，并生成 .dmg 安装包。
+# 把 macOS 二进制打包成可双击的 WildView.app，并生成 .dmg 安装包。
 #
 # 背景（数据目录如何解决）：
 #   cmd/wild-view 启动时会 os.Chdir 到「可执行文件所在目录」，并把
@@ -7,7 +7,7 @@
 #   .app 装进 /Applications 后包内容对普通用户只读，直接放二进制会写失败。
 #   解决办法在程序侧：main.go 的 workDir() 检测到自身位于
 #   .app/Contents/MacOS 内时，自动把数据目录切到
-#   ~/Library/Application Support/WildWork。
+#   ~/Library/Application Support/WildView。
 #
 #   ⚠️ 不要改回「用 shell 启动器脚本包一层」的老做法：macOS 要求 .app 的
 #   CFBundleExecutable 是真正的 Mach-O 主可执行文件，脚本再 exec 进真实
@@ -105,7 +105,7 @@ PLIST
 # 表现为「守护进程正常运行、菜单栏却没有任何图标」（已实测复现）。
 # 数据目录改由程序自身处理：cmd/wild-view 的 workDir() 在检测到
 # 自身位于 .app/Contents/MacOS 内时，自动改用
-# ~/Library/Application Support/WildWork，因此 .app 可以整体只读。
+# ~/Library/Application Support/WildView，因此 .app 可以整体只读。
 
 chmod 755 "$APP/Contents/MacOS/$APP_NAME"
 
