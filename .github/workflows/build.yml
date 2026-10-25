@@ -224,3 +224,5 @@ jobs:
           gh release create "$DEV_TAG" release-assets/* --prerelease \
             --title "Dev Build $(date '+%Y-%m-%d %H:%M')" \
             --notes "Dev 分支自动构建（commit ${{ github.sha }}）"
+
+# 手动触发入口：Actions → Build Release → Run workflow
