@@ -363,22 +363,6 @@ func (c *Client) setDynamic(entries []catalogEntry) {
 	c.catMu.Unlock()
 }
 
-// catalogEntry 查模型能力：动态目录优先，其次静态兜底表。
-// ok=false 表示本工具完全不认识该模型（此时思考档位不下发，见 declaredEffort）。
-func (c *Client) catalogEntry(id string) (catalogEntry, bool) {
-	id = upstreamModelName(id)
-	c.catMu.RLock()
-	for _, e := range c.dynamic {
-		if e.ID == id {
-			c.catMu.RUnlock()
-			return e, true
-		}
-	}
-	c.catMu.RUnlock()
-	e, ok := staticIndex[id]
-	return e, ok
-}
-
 // ---------------------------------------------------------------------------
 // 输出形状
 // ---------------------------------------------------------------------------

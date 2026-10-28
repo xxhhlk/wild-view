@@ -347,8 +347,7 @@ func main() {
 		caPool.Add(a)
 	}
 
-	// 所有流式渠道（对话）：走独立 client（StreamHTTP 无总超时），TimeoutSeconds 只作用于
-	// 非流式调用；流式兜底改由 IdleTimeout（空闲看门狗）承担。理由见 config.StreamIdleSeconds。
+	// 查询客户端统一使用配置的网络超时。
 	wbUp := upstream.New()
 	wbUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	trUp := traework.New()
@@ -373,50 +372,24 @@ func main() {
 	mcUp := monkeycode.New()
 	mcUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	clUp := cline.New()
-	// Cline：非流式 client 保留总超时（一问一答需要兜底）；StreamHTTP **不得**设 Timeout
-	// ——R35：Client.Timeout 覆盖整个生命周期（含读 body），SSE 整个生成期都在读 body，
-	// 长回答必被从中间掐断。共用 Transport 以复用连接池。
 	clUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	clUp.StreamHTTP.Transport = clUp.HTTP.Transport
 	oaUp := officeace.New()
-	// OfficeAce 上游为华为 AgentArts 网关：恒 stream=true，长回答（含思维链）常见，
-	// 非流式 client 保留总超时兜底；StreamHTTP 不设 Timeout（R35）。
 	oaUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	oaUp.StreamHTTP.Transport = oaUp.HTTP.Transport
 	ocUp := oczen.New()
-	// kilo：免密免费池。非流式 client 保留总超时兜底；StreamHTTP 不设 Timeout（R35）。
-	// New() 内两个 client 已共用同一 Transport，这里无需再赋 Transport。
+	ocUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	kiUp := kilo.New()
 	kiUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	// MiniMax：推理是 Anthropic Messages 形状且恒流式，长思考常见 ⇒ 非流式 client 留总超时兜底，
-	// StreamHTTP 不设 Timeout（R35），两者共用 Transport。
 	mimUp := minimax.New()
 	mimUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	mimUp.StreamHTTP.Transport = mimUp.HTTP.Transport
-	// LobsterAI：对话是 OpenAI 兼容面且恒流式；非流式 client 留总超时兜底，
-	// StreamHTTP 不设 Timeout（R35），两者共用 Transport。
 	lobUp := lobsterai.New()
 	lobUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	lobUp.StreamHTTP.Transport = lobUp.HTTP.Transport
-	// ZCode：Anthropic Messages 形态且恒流式；非流式 client 留总超时兜底，
-	// StreamHTTP 不设 Timeout（R35），两者共用 Transport。
 	zcdUp := zcode.New()
 	zcdUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	zcdUp.StreamHTTP.Transport = zcdUp.HTTP.Transport
-	// Gemini：自有 v1internal 信封、恒流式；非流式 client 留总超时兜底，
-	// StreamHTTP 不设 Timeout（R35），两者共用 Transport。
 	gemUp := gemini.New()
 	gemUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	gemUp.StreamHTTP.Transport = gemUp.HTTP.Transport
-	// CodeArts：对话走华为 snap-access（HMAC 签名）且长思考常见；非流式 client 留总超时兜底，
-	// StreamHTTP 不设 Timeout（R35），两者共用 Transport。
 	caUp := codearts.New()
 	caUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	caUp.StreamHTTP.Transport = caUp.HTTP.Transport
 	glmUp := glm.New()
-	// ⚠️ 只改 HTTP（非流式）的 Timeout。
-	// **不要**给 glmUp.StreamHTTP 设 Timeout —— 流式请求一旦有整体超时，
-	// 长回答会在超时点被掐断且无终止帧（实测 2026-09-27 触发 5 次）。
 	glmUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 
 	checkinMinutes, err := config.ParseClockTimes(cfg.Schedule.CheckinTimes)
@@ -614,7 +587,6 @@ func main() {
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	appInst.HandleAPI(mux)
 	// 面板保存 oczen key 后热更新渠道凭证；启动时也应用一次配置中的初始 key
-	appInst.SetOczenSyncer(ocUp.SetAPIKey)
 	ocUp.SetAPIKey(cfg.OczenAPIKey)
 	appInst.SetRootHandler(mux)
 	log.Printf("wild-view revision=%s 数据目录=%s", buildRevision(), wd)

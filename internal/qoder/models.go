@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -184,7 +183,7 @@ func (c *Client) fetchModels(a *auth.Auth) ([]DynamicModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cosy session: %w", err)
 	}
-	if err := sess.ApplyHeaders(req, "", rawURL, a.UID, false, ""); err != nil {
+	if err := sess.ApplyHeaders(req, "", rawURL, a.UID); err != nil {
 		return nil, fmt.Errorf("cosy headers: %w", err)
 	}
 	resp, err := c.HTTP.Do(req)
@@ -234,33 +233,18 @@ func parseSceneModels(apiResp map[string]json.RawMessage) ([]DynamicModel, error
 
 // FetchModels 实现 provider.Upstream：动态模型 → provider.ModelInfo。
 // 客户端名 = display_name 规范化（无 display_name 用 key 兜底）。
-// 同时把 客户端名→key 映射与 key→条目表缓存到 Client，供 ChatStream 路由与取 format/source。
 func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
 	dyn, err := c.fetchModels(a)
 	if err != nil {
 		return nil, err
 	}
-	mm := make(map[string]string, len(dyn))
-	metas := make(map[string]modelMeta, len(dyn))
 	out := make([]provider.ModelInfo, 0, len(dyn))
 	for _, m := range dyn {
 		name := NormalizeModelName(m.DisplayName)
 		if name == "" {
 			name = m.Key
 		}
-		mm[name] = m.Key
 		opts := parseContextOptions(m.ContextConfig)
-		metas[m.Key] = modelMeta{
-			Key:                  m.Key,
-			DisplayName:          m.DisplayName,
-			IsVL:                 m.IsVL,
-			MaxInputTokens:       m.MaxInputTokens,
-			MaxOutputTokens:      m.MaxOutputTokens,
-			Format:               m.Format,
-			Source:               m.Source,
-			DefaultContextWindow: parseDefaultContextWindow(m.ContextConfig),
-			ContextOptions:       opts,
-		}
 		caps := parseThinkingConfig(m.ThinkingConfig)
 		mi := provider.ModelInfo{
 			ID:             name,
@@ -290,16 +274,6 @@ func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
 			mi.ContextFromAPI = true
 		}
 		out = append(out, mi)
-	}
-	c.setModelMap(mm, metas)
-	for _, m := range dyn {
-		nm := NormalizeModelName(m.DisplayName)
-		if strings.Contains(m.DisplayName, "3.8") || strings.Contains(strings.ToLower(m.DisplayName), "flash") {
-			log.Printf("qoder catalog: client=%q key=%q display=%q", nm, m.Key, m.DisplayName)
-		}
-	}
-	if mm["qwen3.8-flash"] == "" {
-		log.Printf("qoder catalog: qwen3.8-flash NOT in dynamic modelMap")
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("models api returned empty list")

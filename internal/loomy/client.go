@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+
 	"net"
 	"net/http"
 	"strings"
@@ -17,7 +17,6 @@ import (
 
 	"wild-view/internal/auth"
 	"wild-view/internal/provider"
-	"wild-view/internal/reasoning"
 )
 
 // Client 讯飞 Loomy 上游客户端。
@@ -25,19 +24,9 @@ import (
 // 且**无 refresh 端点**：session 到期需重新导入。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断。
-	// 2026-09-24 实测两次中断都恰好 120.00s（= config.upstream.timeout_seconds），
-	// 客户端表现为「突然无响应」。空闲兜底改由 IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout。⚠️ 目前**没有配置项**（main 不注入），实际恒为默认值。
-	IdleTimeout time.Duration
 
 	// liveMu 保护 liveIDs（动态目录缓存）——与 raccoon 同款缺陷的修复：
-	// ChatStream 本地校验模型名时若**只查静态表**，上游新增的模型会被误拒，
+	// 本地校验模型名时若**只查静态表**，上游新增的模型会被误拒，
 	// 而它正被 /v1/models 正常透出（后者读动态目录）⇒「面板列出却调不动」。
 	// 用户需要它是因为：静态表基于 2026-09 实测，上游随时新增/下线模型。
 	liveMu  sync.RWMutex
@@ -55,12 +44,7 @@ func (c *Client) baseURL() string {
 	return GatewayBase
 }
 
-// DefaultIdleTimeout 流式空闲超时默认值。
-//
-// 实测正常请求 8~13s 完成（同一模型），故 90s 足够宽松——只拦「真的一个字节都不出」。
-const DefaultIdleTimeout = 90 * time.Second
-
-// New 默认 180s 超时（仅作用于非流式调用；流式见 StreamHTTP）。
+// New 默认 180s 超时（查询请求统一使用）。
 func New() *Client { return NewWithTimeout(180 * time.Second) }
 
 // NewWithTimeout 指定非流式超时。
@@ -69,15 +53,14 @@ func NewWithTimeout(timeout time.Duration) *Client {
 		timeout = 180 * time.Second
 	}
 	return &Client{
-		HTTP:       &http.Client{Timeout: timeout, Transport: newTransport()},
-		StreamHTTP: &http.Client{Transport: newTransport()},
+		HTTP: &http.Client{Timeout: timeout, Transport: newTransport()},
 	}
 }
 
 // newTransport 出厂 Transport：禁 h2 + Dial/keepalive + TLS 握手 + ResponseHeaderTimeout。
 //
 // ⚠️ 此前本包 `&http.Client{Timeout: ...}` 未设 Transport，实际在共用 http.DefaultTransport
-// （h2 开启、无 ResponseHeaderTimeout）。StreamHTTP 无总超时后**必须**有
+// （h2 开启、无 ResponseHeaderTimeout）。查询请求必须有
 // ResponseHeaderTimeout 兜底，否则连响应头都等不到就会无限挂住。
 func newTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 15 * time.Second}
@@ -99,22 +82,6 @@ func (c *Client) httpClient() *http.Client {
 		c.HTTP = &http.Client{Timeout: 180 * time.Second, Transport: newTransport()}
 	}
 	return c.HTTP
-}
-
-// streamClient 返回流式调用用的客户端（无总超时，回落 HTTP 保证 nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 // sessionOf 读取凭据里的 session（nil 安全）。
@@ -191,126 +158,6 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 // 推理
 // ---------------------------------------------------------------------------
 
-// ChatStream 实现 provider.Upstream。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	// 校验集合 = 静态表 ∪ 已拉取到的动态目录（见 knownModel）。
-	if m := modelOf(body); m != "" && !c.knownModel(m) {
-		return nil, http.StatusBadRequest, []byte(unknownModelBody(m)), nil
-	}
-	projected := projectEffort(body)
-	logReasoningOnce(body, projected)
-
-	req, err := http.NewRequest(http.MethodPost, c.baseURL()+EpChat, bytes.NewReader(projected))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	applyAuth(req, a)
-	// 用无总超时的 client：长思考请求不受整请求上限约束（见 Client.StreamHTTP）。
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		_ = resp.Body.Close()
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 stream:false 的聚合路径共用这一层（聚合时由「总时长硬上限」
-	// 变为「空闲上限」，长而持续输出的响应不再被误杀）。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
-}
-
-// projectEffort 把顶层 `reasoning_effort` 投影成官方客户端的三件套方言，并按模型能力降级档位。
-//
-// 官方形态（桌面版 `llm-completion.js` 实测）：
-//
-//	{ reasoning_effort, enable_thinking, chat_template_kwargs: { enable_thinking } }
-//
-// 档位降级（与 Qoder 三渠道对齐）：上游 `/models` 为每个模型声明 `reasoning_efforts`
-// （实测 8 个模型一致，均为 none/low/medium/high/xhigh，default=low）。
-// 客户端可能发上游不认的档位（`max` / `ultra` / `minimal`）—— 上游虽然宽容不报错，
-// 但会静默按默认档处理，让用户以为档位生效。故先 Clamp 到该模型 ladder 内的档位。
-//
-// ⚠️ 阶段 C 文档曾记「三件套让思考单调递减」——那是**单次采样**，2026-09-24 用同一模型
-// 每档 3 次采样发现值域完全重叠（none 1102/1048/1465、high 1085/1526/1455），
-// 该结论不成立。协议层投影正确不代表模型层会精细响应档位，故此处只保证「发出的档位合法」。
-//
-// 只在客户端确实表达了档位时才补字段（未表达时保持原样，避免替客户端做决定 —— 对齐 R19 的思路）。
-func projectEffort(body []byte) []byte {
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return body
-	}
-	raw, ok := obj["reasoning_effort"]
-	if !ok {
-		return body
-	}
-	effort, _ := raw.(string)
-	effort = strings.TrimSpace(effort)
-	if effort == "" {
-		return body
-	}
-	model, _ := obj["model"].(string)
-	if clamped := reasoning.Caps.Clamp(reasoning.RealmLoomy, strings.TrimSpace(model), effort); clamped != "" {
-		effort = clamped
-	}
-	on := effort != "none"
-	obj["reasoning_effort"] = effort
-	obj["enable_thinking"] = on
-	if _, exists := obj["chat_template_kwargs"]; !exists {
-		obj["chat_template_kwargs"] = map[string]any{"enable_thinking": on}
-	}
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-// logReasoningOnce 记一行档位日志（对齐 qoder 三渠道的排障约定）。
-//
-// 动机：Loomy 的档位此前完全静默 —— 实测时无法从 app.log 判断
-// 「客户端表达了什么 / Clamp 后下发什么」，只能靠抓包。这里补上最终生效值。
-func logReasoningOnce(orig, projected []byte) {
-	var before, after struct {
-		Model           string `json:"model"`
-		ReasoningEffort string `json:"reasoning_effort"`
-	}
-	if err := json.Unmarshal(orig, &before); err != nil {
-		return
-	}
-	if err := json.Unmarshal(projected, &after); err != nil {
-		return
-	}
-	if before.ReasoningEffort == "" && after.ReasoningEffort == "" {
-		return // 客户端未表达且投影不动：无信息量，不打日志
-	}
-	log.Printf("loomy reasoning: model=%q in=%q out=%q", before.Model, before.ReasoningEffort, after.ReasoningEffort)
-}
-
-// modelOf 取请求体里的 model。
-func modelOf(body []byte) string {
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(probe.Model)
-}
-
-// unknownModelBody 未知模型的本地 400（上游会静默回落默认模型，故本地拒绝）。
-func unknownModelBody(m string) string {
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": fmt.Sprintf("loomy: 未知模型 %q。上游对未知模型会静默回落到默认模型，故本地直接拒绝；可用模型见 GET /v1/models", m),
-		"type":    "invalid_request_error",
-		"code":    "model_not_found",
-	}})
-	return string(b)
-}
-
 // ---------------------------------------------------------------------------
 // 模型与费率
 // ---------------------------------------------------------------------------
@@ -353,7 +200,7 @@ func (c *Client) fetchModels(a *auth.Auth) (*modelsResp, error) {
 	if len(out.Data) == 0 {
 		return nil, fmt.Errorf("loomy 模型目录为空")
 	}
-	// 记下目录里的模型名，供 ChatStream 的本地校验取并集（同 raccoon）。
+	// 记下目录里的模型名，供本地模型校验取并集（同 raccoon）。
 	ids := make([]string, 0, len(out.Data))
 	for _, m := range out.Data {
 		if id := strings.TrimSpace(m.ID); id != "" {
@@ -364,7 +211,7 @@ func (c *Client) fetchModels(a *auth.Auth) (*modelsResp, error) {
 	return &out, nil
 }
 
-// knownModel 模型名是否可接受（ChatStream 的本地校验入口）。
+// knownModel 模型名是否可接受（本地模型校验入口）。
 //
 // 判据 = KnownModel（静态表） ∪ 已拉取到的动态目录。
 // 动态部分**必须**参与：/v1/models 透出的是动态目录（FetchModels 的结果），

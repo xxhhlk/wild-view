@@ -1,7 +1,12 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -97,6 +102,39 @@ func TestSchedulerCountMatchesRuntimes(t *testing.T) {
 			strings.Join(missing, "\n  "))
 	}
 	t.Logf("runtimes 注册 %d 个 Scheduler，已启动 %d 个", len(declared), len(started))
+}
+
+// TestViewerHasNoConversationImplementations prevents chat forwarding code from
+// returning through a channel package, including optional live probes.
+func TestViewerHasNoConversationImplementations(t *testing.T) {
+	root := filepath.Join("..", "..", "internal")
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			switch fn.Name.Name {
+			case "ChatStream", "Stream", "Aggregate":
+				t.Errorf("conversation implementation remains at %s", fset.Position(fn.Pos()))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func keys(m map[string]bool) []string {

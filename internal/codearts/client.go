@@ -13,16 +13,14 @@
 package codearts
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+
 	"fmt"
-	"io"
+
 	"net"
 	"net/http"
-	"os"
-	"strconv"
+
 	"strings"
 	"sync"
 	"time"
@@ -35,20 +33,13 @@ import (
 type Client struct {
 	// HTTP 带总超时，供控制面（目录 / 积分 / 活动 / 续期）。
 	HTTP *http.Client
-	// StreamHTTP 专供对话 SSE：**无总超时**（R35），
-	// 卡死由首 token / chunk 两段空闲看门狗兜底（见 sse.go 的 phaseReader）。
-	StreamHTTP *http.Client
+
 	// Base 对话与控制面基址（默认 APIBase）。
 	Base string
 	// BenefitBase benefit 模型目录基址（默认 BenefitBase 常量）。
 	BenefitBase string
 	// STSURL 凭据换取 / 续期端点（默认 STSTokenURL）。
 	STSURL string
-	// FirstTokenTimeout / ChunkTimeout 两段空闲看门狗阈值；
-	// 0 = 用默认值（可由环境变量 DSH_CODEARTS_SSE_FIRST_TOKEN_TIMEOUT_MS /
-	// DSH_CODEARTS_SSE_CHUNK_TIMEOUT_MS 覆盖，协议 §2.4）。
-	FirstTokenTimeout time.Duration
-	ChunkTimeout      time.Duration
 
 	catMu sync.RWMutex // 见 models.go（动态目录 + benefit 集合的进程内缓存）
 	cat   *catalogCache
@@ -71,13 +62,13 @@ func New() *Client {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到
+		// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住
 		// 就会无限挂住（与 minimax/kilo 同款理由）。
 		ResponseHeaderTimeout: 120 * time.Second,
 	}
 	return &Client{
-		HTTP:        &http.Client{Transport: tr, Timeout: requestTimeout},
-		StreamHTTP:  &http.Client{Transport: tr}, // 共用 Transport，不设 Timeout
+		HTTP: &http.Client{Transport: tr, Timeout: requestTimeout},
+		// 共用 Transport，不设 Timeout
 		Base:        APIBase,
 		BenefitBase: BenefitBase,
 		STSURL:      STSTokenURL,
@@ -95,7 +86,7 @@ func NewWithBase(base string) *Client {
 // （两个 client 必须一起换，否则流式路径绕过包装）。
 func (c *Client) SetTransport(tr http.RoundTripper) {
 	c.HTTP.Transport = tr
-	c.StreamHTTP.Transport = tr
+
 }
 
 // base 返回生效的对话/控制面基址。
@@ -130,90 +121,9 @@ func (c *Client) httClient() *http.Client {
 	return &http.Client{Timeout: requestTimeout}
 }
 
-// streamClient 返回流式客户端（无总超时；nil 安全回落）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP != nil {
-		return c.StreamHTTP
-	}
-	return &http.Client{Transport: New().StreamHTTP.Transport}
-}
-
-// chatURL 对话端点。
-func (c *Client) chatURL() string { return c.base() + EpChatCompletions }
-
 // ---------------------------------------------------------------------------
 // provider.Upstream：对话
 // ---------------------------------------------------------------------------
-
-// ChatStream 发一次对话请求（恒流式）。
-//
-// 返回约定（与其它渠道一致，handler 依赖它分类与透传）：
-//   - 传输错误                     → (nil, 0, nil, err)
-//   - 本地出站体不可构造 / 缺凭据   → (nil, 4xx, 本地错误体, nil)
-//   - HTTP ≥ 400                   → (nil, status, 上游原始响应体, nil)  ← 原文透传
-//   - 200                          → (带两段空闲看门狗的 body, 200, nil, nil)
-//
-// `InferHub.4004.200`（该账号无 benefit 包）按协议「去掉 maas_type 头重试**一次**」处理：
-// 仅针对**非 2xx**响应（流内出现时 HTTP 200 与响应头早已发出，无法重发，见 sse.go 注释）。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
-	ac := accountFromAuth(a)
-	if ac.AccessKeyID == "" || ac.SecretAccessKey == "" {
-		// 本地 401：Classify 归 ErrSessionDead（凭据不完整 = 会话需重登），
-		// 消息里点明缺什么，便于用户在面板上定位。
-		return nil, http.StatusUnauthorized, localErrorBody("codearts：凭据不完整（缺 access_key_id / secret_access_key），请重新登录"),
-			nil
-	}
-	model := modelOf(body)
-	sess := newSessionIDs()
-	out, berr := buildChatBody(body, model, sess.sessionID)
-	if berr != nil {
-		return nil, http.StatusBadRequest, badParamsBody(berr), nil
-	}
-	benefit := c.isBenefitModel(model)
-
-	rc, status, raw, err := c.doChat(ac, out, sess, benefit)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	if status >= 400 && benefit && reNoBenefitPackage.MatchString(string(raw)) {
-		// 该账号没有 benefit 包：去掉 maas_type 重试一次（协议 §2.4 表末行）。
-		rc2, status2, raw2, err2 := c.doChat(ac, out, sess, false)
-		if err2 != nil {
-			return nil, 0, nil, err2
-		}
-		return rc2, status2, raw2, nil
-	}
-	return rc, status, raw, nil
-}
-
-// doChat 发一次对话请求。benefit=true 时 maas_type 参与签名并随请求发出。
-func (c *Client) doChat(ac *Account, body []byte, sess sessionIDs, benefit bool) (io.ReadCloser, int, []byte, error) {
-	req, err := http.NewRequest(http.MethodPost, c.chatURL(), bytes.NewReader(body))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	var signedExtra map[string]string
-	if benefit {
-		signedExtra = map[string]string{HeaderMaaSType: MaaSTypeBenefit}
-	}
-	if err := signAndApply(req, ac, body, "application/json", signedExtra, time.Now()); err != nil {
-		return nil, 0, nil, err
-	}
-	// 以下头**必须**在签名之后追加（协议 §2.2：放进 canonical 就是 401 APIG.0301）。
-	req.Header.Set("User-Agent", userAgent)
-	applyUnsigned(req, sess.headers())
-
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return nil, resp.StatusCode, raw, nil
-	}
-	return c.watch(resp.Body), resp.StatusCode, nil, nil
-}
 
 // userAgent 出站 UA。上游不校验指纹，这里如实标识本工具，便于上游侧排查异常流量。
 const userAgent = "WildWork/1.0 (codearts)"
@@ -252,49 +162,4 @@ func UUID4() string {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-// modelOf 取请求体里的 model。
-func modelOf(body []byte) string {
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if json.Unmarshal(body, &probe) != nil {
-		return ""
-	}
-	return strings.TrimSpace(probe.Model)
-}
-
-// badParamsBody 本地出站体拒绝的错误体（OpenAI 风格）。
-// code=bad_params 让上层 Classify 归请求级错误：不罚号、不轮换、原文透传。
-func badParamsBody(err error) []byte {
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": "codearts：" + err.Error(),
-		"type":    "invalid_request_error",
-		"code":    "bad_params",
-	}})
-	return b
-}
-
-// localErrorBody 构造本地错误体（缺凭据等本地前置失败）。
-func localErrorBody(msg string) []byte {
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": msg,
-		"type":    "authentication_error",
-		"code":    "session_dead",
-	}})
-	return b
-}
-
-// envDurationMS 读毫秒级环境变量覆盖（非法值忽略，回落 def）。
-func envDurationMS(name string, def time.Duration) time.Duration {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return def
-	}
-	ms, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || ms <= 0 {
-		return def
-	}
-	return time.Duration(ms) * time.Millisecond
 }

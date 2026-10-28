@@ -148,8 +148,9 @@ type AuthCodeRejectedError struct {
 	Body   string
 }
 
+// Error 实现 error：保留上游首个 origin 的状态码与响应原文。
 func (e *AuthCodeRejectedError) Error() string {
-	return fmt.Sprintf("AuthCode rejected: %s => HTTP %d %s", e.Origin, e.Status, truncate(e.Body, 160))
+	return fmt.Sprintf("auth code rejected (http %d, %s): %s", e.Status, e.Origin, e.Body)
 }
 
 // IsDeviceLimitReached 判断是否设备数上限（20401 / Device limit reached）。

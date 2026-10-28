@@ -37,7 +37,6 @@ import (
 	logintrae "wild-view/internal/login_trae"
 	"wild-view/internal/login_wbai"
 	loginzcode "wild-view/internal/login_zcode"
-	"wild-view/internal/oczen"
 	"wild-view/internal/officeace"
 	"wild-view/internal/platform"
 	"wild-view/internal/pool"
@@ -76,9 +75,6 @@ type Runtime struct {
 	// uid → 账号反查）必须跳过别名渠道，否则同一账号会被计入两次（见 issue #36）。
 	// 别名渠道仍保留独立的模型/费率抓取（各自 upstream 的 function 不同）。
 	Alias bool
-
-	// Custom 标记该渠道为用户自定义 OpenAI 兼容第三方渠道（R66）。
-	Custom bool
 }
 
 // Options 构建 App 的依赖。
@@ -143,20 +139,16 @@ type App struct {
 
 	logFile *os.File
 
-	// compatSyncer 面板保存 compat 后同步给外层兼容层（热更新路由表 + 思考摘要策略）。
-	// 由 main.go 注入；nil 时仅写配置不热更（下次启动生效）。
-	compatSyncer func(defaultChannel string, maxTokensCap int, modelMap map[string]string, reasoningSummary string)
-
-	// oczenSyncer 面板保存 oczen key 后写入渠道 client（热更新凭证）。
-	// 由 main.go 注入；nil 时仅写配置不热更。
-	oczenSyncer func(key string)
-
 	refreshMu  sync.Mutex // 防并发刷新积分
 	refreshing bool
 
 	// ledger 用量/积分双流水（data/ledger/）；锦上添花统计，nil = 未启用
 	ledger     *ledger.Ledger
 	ledgerStop chan struct{}
+	// bgRefresh 跟踪后台刷新循环（额度/目录）。Close 先等它们退出再关 ledger，
+	// 否则循环可能正在写流水而 Close 已把句柄关掉——Windows 上表现为临时目录
+	// 删不掉（测试）与日志半截（生产）。
+	bgRefresh sync.WaitGroup
 
 	// catalog 模型目录与倍率的账号作用域缓存（见 catalog.go）。
 	catalog *catalog
@@ -245,6 +237,17 @@ func (a *App) healRaccoonProtocol() {
 
 // Close 关闭日志文件。
 func (a *App) Close() {
+	// 先等后台刷新循环退出（有上限，避免上游卡住拖住退出），再关 ledger。
+	waited := make(chan struct{})
+	go func() {
+		a.bgRefresh.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-time.After(3 * time.Second):
+		log.Printf("close: 后台刷新未在 3s 内退出，继续关闭")
+	}
 	// 停 ledger 自动落盘并冲刷句柄（丢最后几秒流水可接受，但不能一直丢）
 	if a.ledgerStop != nil {
 		select {
@@ -2126,7 +2129,9 @@ func (a *App) StartCreditAutoRefresh(ctx context.Context, kinds []provider.Kind,
 	if interval <= 0 {
 		interval = CreditRefreshInterval
 	}
+	a.bgRefresh.Add(1)
 	go func() {
+		defer a.bgRefresh.Done()
 		refresh := func() {
 			for _, k := range kinds {
 				rt := a.runtime(k)
@@ -2195,7 +2200,9 @@ func (a *App) StartPricingAutoRefresh(ctx context.Context, interval time.Duratio
 	if interval <= 0 {
 		interval = PricingRefreshInterval
 	}
+	a.bgRefresh.Add(1)
 	go func() {
+		defer a.bgRefresh.Done()
 		// 启动即补拉一次：目录与倍率都在 RefreshCatalog 内按 TTL 判断，
 		// 新鲜缓存不会重复打上游。之后每 interval 检查一次过期项。
 		a.RefreshCatalog(false)
@@ -2225,12 +2232,6 @@ func (a *App) RefreshCredits(uid string) (int64, error) {
 	if rt.Kind == provider.Kilo {
 		// 免密免费池同样没有积分概念（面板显示「不适用」）。
 		return 0, fmt.Errorf("Kilo 免费池无积分，不适用")
-	}
-	if rt.Custom {
-		// 自定义渠道（R66）无积分接口：凭据本体是渠道级 api_key（对话转发用），
-		// 不拒绝会落入 creditSnapshot 把 pool 快照写成 0（UserResourceDetail 恒返回空），
-		// 让人误读成「额度已用光」。
-		return 0, fmt.Errorf("%s 为自定义渠道，无积分概念，不适用", rt.Kind)
 	}
 	// 注意：ZCode **不**在这里拒绝 —— 它的额度是 token 口径，同样需要刷新才能看到用量；
 	// 它的数字由 credits_unit="token" 标注，不进积分小计与流水（见 creditsUnit）。
@@ -2267,12 +2268,6 @@ func (a *App) RefreshAll() RefreshSummary {
 		// oczen / kilo 无「额度」可刷：纳入只会产生一条无意义的失败记录。
 		// （ZCode 要走刷新：它的额度是 token 口径，同样需要更新才能看到用量。）
 		if rt.Kind == provider.Oczen || rt.Kind == provider.Kilo {
-			continue
-		}
-		// 自定义渠道（R66）同样无积分概念：凭据本体是渠道级 api_key（对话转发用），
-		// 占位账号无 access/refresh token，且 UserResourceDetail 恒返回空。
-		// 纳入只会把每个自定义渠道都记成一条「no token」假失败（面板报「失败 N」噪音）。
-		if rt.Custom {
 			continue
 		}
 		ps := PlatformSummary{Accounts: []AccountRefresh{}}
@@ -2340,9 +2335,6 @@ func (a *App) RemoveAccount(uid string) error {
 	if rt.Kind == provider.Kilo {
 		return fmt.Errorf("Kilo 免费池账号不可删除")
 	}
-	if rt.Custom {
-		return fmt.Errorf("自定义渠道已移除，无法删除 %s", rt.Kind)
-	}
 	if au.FilePath != "" {
 		_ = os.Remove(au.FilePath)
 	}
@@ -2363,11 +2355,6 @@ func (a *App) ResourceDetail(uid string) (remain int64, items []provider.Resourc
 	}
 	if rt.Kind == provider.Kilo {
 		return 0, nil, 0, 0, fmt.Errorf("Kilo 免费池无积分，不适用")
-	}
-	if rt.Custom {
-		// 自定义渠道（R66）无明细接口：UserResourceDetail 恒返回空 items，
-		// 不拒绝会让前端弹出一张空白明细层。
-		return 0, nil, 0, 0, fmt.Errorf("%s 为自定义渠道，无积分明细，不适用", rt.Kind)
 	}
 	return a.creditSnapshot(rt, au)
 }
@@ -2540,35 +2527,6 @@ type customRename struct {
 	Old string `json:"old"`
 }
 
-func (a *App) SetOczenSyncer(fn func(key string)) { a.oczenSyncer = fn }
-
-// TestOczenKey 验证 OpenCodeZen 凭证可用性（设置面板「测试」按钮）。
-// apiKey 非空时先用该 key 临时写入渠道 client（测试后恢复原值），空则直接测当前生效凭证。
-// 判定：200/429 均 return ok（200=配额正常，429=连通但限流，对匿名 key 属正常现象）。
-//
-// 测试后经同一个 backuplink.Replay 编排（与真实对话同源，见 issue #117）：直连被上游按地区
-// 拒绝时机内自动改走备用通道；viaBackup 报告答复是否来自备用出口，面板据此如实展示——
-// 原先只看 403 是看不出「代理到底有没有被用上」的。
-func (a *App) TestOczenKey(apiKey string) (int, string, bool, error) {
-	rt := a.runtime(provider.Oczen)
-	if rt == nil {
-		return 0, "", false, fmt.Errorf("oczen 渠道未启用")
-	}
-	c, ok := rt.Upstream.(*oczen.Client)
-	if !ok {
-		return 0, "", false, fmt.Errorf("oczen 渠道类型异常")
-	}
-	// 临时写入候选 key（含空串 = 测匿名）；结束后恢复配置值，保证面板「取消」不残留半生效状态
-	orig := a.cfg.OczenAPIKey
-	c.SetAPIKey(apiKey)
-	defer c.SetAPIKey(orig)
-	status, body, via, err := c.TestKey()
-	if err != nil {
-		return 0, body, via, fmt.Errorf("无法连接 OpenCodeZen（检查网络/代理）：%v", err)
-	}
-	return status, body, via, nil
-}
-
 // maskKey 脱敏形态：长头 + **** + 短尾（R121）。头取 12 个字符、尾取 4 个，但可见总量
 // 不得超过原文一半（短 key 自动收缩头部，收到 4 字符以下就直接全遮）。
 // 头部留长是硬需求：第三方 key 的**前缀**才是辨识度来源（百度千帆 bce-v3/ALTAK…、
@@ -2722,11 +2680,11 @@ type ModelCoolView struct {
 
 // State Web UI 初始数据。
 type State struct {
-	Accounts       []AccountView `json:"accounts"`
-	CheckinTimes   []string      `json:"checkin_times"`
-	ExpiringDays   int           `json:"expiring_days"` // 临期展示窗口（天），仅支持 1/2/3
-	ListenHost     string        `json:"listen_host"`
-	ListenPort     int           `json:"listen_port"`
+	Accounts     []AccountView `json:"accounts"`
+	CheckinTimes []string      `json:"checkin_times"`
+	ExpiringDays int           `json:"expiring_days"` // 临期展示窗口（天），仅支持 1/2/3
+	ListenHost   string        `json:"listen_host"`
+	ListenPort   int           `json:"listen_port"`
 
 	// AdminPassSet 是否已配置管理密码（不回显密码本身）；
 	// AuthEnabled = 面板鉴权已生效（密码非空）；
@@ -3568,9 +3526,9 @@ type feesModelRow struct {
 	// 能力标记（与 /v1/models 同源），供 UI 在模型 ID 后展示图标。
 	// Rates 各账号对同一模型的倍率（仅在渠道有多个账号时下发）。
 	Rates             []feesRate `json:"rates,omitempty"`
-	SupportsImages    bool `json:"supports_images"`
-	SupportsReasoning bool `json:"supports_reasoning"`
-	SupportsTools     bool `json:"supports_tools"`
+	SupportsImages    bool       `json:"supports_images"`
+	SupportsReasoning bool       `json:"supports_reasoning"`
+	SupportsTools     bool       `json:"supports_tools"`
 	// 思考档位（与 /v1/models 的 reasoning_supported_efforts 同源）：
 	// 空表示该渠道无档位能力或该模型未被收录，前端不展示档位行。
 	SupportedEfforts []string `json:"supported_efforts,omitempty"`
@@ -3694,12 +3652,6 @@ func (a *App) FeesInfo() map[string]any {
 			needRefresh = true
 		}
 	}
-	// 无账号渠道（自定义）的静态目录仍需展示。
-	for k, ms := range a.staticModelFallback() {
-		if len(modelsByKind[k]) == 0 {
-			modelsByKind[k] = ms
-		}
-	}
 	if needRefresh {
 		// 非强制刷新：只补拉过期/从未成功的项，新鲜数据不会重复打上游。
 		a.safeGo(func() { a.RefreshCatalog(false) })
@@ -3819,19 +3771,6 @@ func capSourceOf(mi provider.ModelInfo) string {
 		return "user"
 	}
 	return ""
-}
-
-func (a *App) staticModelFallback() map[provider.Kind][]provider.ModelInfo {
-	out := map[provider.Kind][]provider.ModelInfo{}
-	for _, rt := range a.runtimesSnapshot() {
-		if rt == nil || !rt.Custom || rt.Upstream == nil {
-			continue
-		}
-		if ms, err := rt.Upstream.FetchModels(nil); err == nil && len(ms) > 0 {
-			out[rt.Kind] = ms
-		}
-	}
-	return out
 }
 
 // RefreshPricing 手动刷新入口：强制重新拉取全部账号的目录与倍率。

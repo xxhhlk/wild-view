@@ -8,11 +8,11 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
+
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
+
 	"fmt"
 	"net/http"
 	"net/url"
@@ -32,18 +32,6 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`
 
 var serverPubKey *rsa.PublicKey
-
-func init() {
-	block, _ := pem.Decode([]byte(serverPubKeyPEM))
-	if block == nil {
-		panic("bad server pubkey PEM")
-	}
-	k, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		panic(err)
-	}
-	serverPubKey = k.(*rsa.PublicKey)
-}
 
 // CosySession 每账号的签名状态。
 type CosySession struct {
@@ -165,17 +153,14 @@ func (s *CosySession) AuthHeader(body, rawURL, uid string) (auth, date string, e
 	return "Bearer COSY." + payloadB64 + "." + sig, date, nil
 }
 
-// ApplyHeaders 把桌面版实测的请求头集合设置到 req。
+// ApplyHeaders 把桌面版实测的请求头集合设置到 req（只读查询用）。
 //
 // 取值以 2026-09-20 抓到的 Qoder CN 桌面版真实请求为准（_spy/qoder-real-request.json，
 // 27 个头）。相对早期实现的差异：cosy-clienttype 5→10、cosy-data-policy
 // AGREE→disagree、cosy-version 0.1.43→1.1.57（签名 payload 的 cosyVersion 同步）、
 // 补 cosy-business-product/-type/-scene 与 cosy-machineos/-machinehostname、
 // 去掉桌面端没有的 cosy-clientip。
-//
-// 唯一刻意保留的差异：accept-encoding 固定 identity（桌面端是 br,gzip,deflate）。
-// Go 手动设置该头后不会自动解压，而 brotli 需要额外依赖；identity 能拿到明文 SSE。
-func (s *CosySession) ApplyHeaders(req *http.Request, body, rawURL, uid string, sse bool, modelKey string) error {
+func (s *CosySession) ApplyHeaders(req *http.Request, body, rawURL, uid string) error {
 	auth, date, err := s.AuthHeader(body, rawURL, uid)
 	if err != nil {
 		return err
@@ -188,11 +173,8 @@ func (s *CosySession) ApplyHeaders(req *http.Request, body, rawURL, uid string, 
 	h.Set("cosy-date", date) // 与签名内时间戳同一值，见 AuthHeader
 	h.Set("cosy-user", uid)
 	h.Set("cosy-key", s.CosyKey)
-	h.Set("accept", "text/event-stream")
+	h.Set("accept", "application/json")
 	h.Set("accept-language", "*")
-	if sse {
-		h.Set("cache-control", "no-cache")
-	}
 	h.Set("authorization", auth)
 	h.Set("accept-encoding", "identity")
 	h.Set("cosy-version", clientVersion)
@@ -207,10 +189,6 @@ func (s *CosySession) ApplyHeaders(req *http.Request, body, rawURL, uid string, 
 	h.Set("cosy-scene", "app")
 	h.Set("login-version", "v2")
 	h.Set("user-agent", clientUA)
-	if modelKey != "" {
-		h.Set("x-model-key", modelKey)
-		h.Set("x-model-source", defaultModelSource)
-	}
 	return nil
 }
 

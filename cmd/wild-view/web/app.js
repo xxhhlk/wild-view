@@ -385,27 +385,11 @@ function render() {
 
 // renderTopbar 顶栏 API 地址渲染：
 // - 监听 127.0.0.1/localhost → 原样显示；
-// - 监听 0.0.0.0/::/空（所有网卡）→ 显示局域网 IP（lan_ip），客户端可跨机接入；
-//   取不到局域网 IP 时兜底 127.0.0.1；
-// - 其他自定义地址 → 原样显示。
-// 此前 0.0.0.0 被硬换成 127.0.0.1，局域网客户端复制到的是本机环回地址，无法跨机接入。
 function renderTopbar() {
   $("ver").textContent = "v" + state.version;
   $("serverLine").textContent = state.running ? "服务运行中" : "服务未启动";
   $("aboutVer").textContent = state.version;
 
-  const wildcard = state.listen_host === "0.0.0.0" || state.listen_host === "" || state.listen_host === "::";
-  const host = wildcard ? (state.lan_ip || "127.0.0.1")
-    : (state.listen_host === "localhost" ? "127.0.0.1" : state.listen_host);
-  const apiURL = `http://${host}:${state.listen_port}/v1`;
-  $("apiAddr").querySelector(".val").textContent = apiURL;
-  // 监听所有网卡时提示真实含义（避免误导为仅本机可用）
-  $("apiAddr").title = wildcard
-    ? `监听 0.0.0.0（所有网卡），局域网可用；点击复制`
-    : "点击复制地址";
-
-  const key = state.api_key;
-  $("apiKeyDisplay").querySelector(".val").textContent = key === "" ? "（无鉴权）" : key;
 }
 
 // 渠道显示名与 CSS 短类名（后端 group / 费率 channel 均为 provider.Kind）。
@@ -418,11 +402,8 @@ const chClass = (k) => CH_CLASS[k] || "wb";
 // 历史流水，可能是新增/已删渠道，显示原 id 才有诊断价值（chLabel 的兜底是给
 // 固定入口用的，那里必须有个能看的名字）。
 const chNameOf = (k) => CH_LABEL[k] || k || "";
-// isCustomGroup 该分组是否为用户自定义 OpenAI 兼容渠道（R66）。
-// 以 state.custom_channels（后端 /api/state 下发，保存即热更新）为准，勿在前端另维护一份。
-const isCustomGroup = (g) => !!(state && (state.custom_channels || []).some((c) => c && c.name === g));
-// hasNoCredits 该分组是否无积分概念：内建 NA 名单 ∪ 动态自定义渠道。与后端 creditsNAKind 同口径。
-const hasNoCredits = (g) => NO_CREDITS_BUILTIN.has(g) || isCustomGroup(g);
+// hasNoCredits 该分组是否无积分概念（与后端 creditsNAKind 同口径）。
+const hasNoCredits = (g) => NO_CREDITS_BUILTIN.has(g);
 // chPrefix 渠道前缀：客户端模型名必须带的渠道段（provider.Kind 即前缀，
 // 例如小浣熊填 raccoon/<模型名>）。面板多处要展示「客户端该填什么」，
 // 统一由此出口，避免各写一份副本随渠道增加而漂移。
@@ -461,8 +442,6 @@ const NO_CHECKIN_TAG = { workbuddyai: "自动领日活奖励", oczen: "不支持
 const noCheckinText = (g) => NO_CHECKIN_TAG[g] || "无签到";
 // 无积分概念的渠道：积分区域显示「不适用」，并隐藏刷新积分/明细入口。
 // 内建名单：oczen / kilo（免密免费池，无账号与余额端点）、cline（官方无余额端点，UserResource 恒 0）；
-// 自定义渠道（R66）同样无积分，但渠道名是用户配置的、运行期可增删，
-// 故运行时以后端下发的 custom_channels 动态判定（isCustomGroup）。
 const NO_CREDITS_BUILTIN = new Set(["oczen", "kilo", "cline"]);
 
 // creditsText 账号卡片的积分文案。
@@ -595,21 +574,20 @@ function renderAccounts() {
       ? `<span class="icon-op off" title="${esc(noCheckinTitle)}" onclick="return false">✓</span>`
       : `<span class="icon-op" title="签到" onclick="checkin('${a.uid}')">✓</span>`;
 
-    // 无积分渠道（匿名 oczen / Cline / 自定义渠道）：只去掉「刷新积分」，
+    // 无积分渠道（匿名 oczen / Cline）：只去掉「刷新积分」，
     // 保留签到（若渠道有）/停用/删除/改名入口。其中**固定账号**（后端硬拒的 oczen）
     // 连停用/删除/改名都不给，只留「不可操作」的静态指示，避免用户白点一次——
-    // 自定义渠道虽无积分但账号可管，故必须与固定账号区分（否则删不掉）。
     const noCredits = hasNoCredits(a.group);
-    const fixedAcct = noCredits && !isCustomGroup(a.group);
-    // 问号图标：hover 展示 oczen 通道说明（免费反代范围/私有 Key/代理三项）。
+    const fixedAcct = noCredits;
+    // 问号图标：hover 展示 oczen 通道说明（查询范围 / 私有 Key）。
     // 放在锁头左侧；用独立的 help 样式（正常亮度 + help 光标），不可点击但 tooltip 可用。
     // title 内换行用 &#10;（HTML 属性实体），字面 \n 会被部分浏览器吞掉导致无 tooltip。
-    const oczenHelp = `<span class="icon-op help" title="关于 OpenCodeZen 通道：&#10;1. 本工具仅反代其免费模型（绕过官方客户端限制）；付费账号可直接使用官方端点，无需经此通道&#10;2. 在 OpenCodeZen 获取的 API-Key 可在设置中配置，避免匿名账号共享限额超限&#10;3. 配置代理后可使用有地域限制的模型，可用性取决于上游通道">?</span>`;
+    const oczenHelp = `<span class="icon-op help" title="关于 OpenCodeZen 通道：&#10;1. 本工具只读取其免费模型的目录与额度，不做任何转发&#10;2. 在 OpenCodeZen 获取的 API-Key 可在设置中配置，避免匿名账号共享限额超限&#10;3. 部分模型有地域限制，可用性取决于上游">?</span>`;
     const ops = fixedAcct
       ? `${oczenHelp}<span class="icon-op off" title="固定账号，不可停用/删除" onclick="return false">🔒</span>`
       : `${checkinBtn}
           ${noCredits ? "" : `<span class="icon-op" title="刷新积分" onclick="refreshOne('${a.uid}')">↻</span>`}
-          <span class="icon-op danger" title="${isCustomGroup(a.group) ? esc("删除账号（自定义渠道将移除整个渠道配置）") : "删除账号"}" onclick="removeAcct('${a.uid}')">✕</span>`;
+          <span class="icon-op danger" title="删除账号" onclick="removeAcct('${a.uid}')">✕</span>`;
     // 显示名：点击直接弹出改名框（固定账号不可改，降级为普通文本）。
     // oczen 特例：渠道名已由 badge 承担，名字按凭证形态显示「匿名/私有Key」。
     const isOczen = a.group === "oczen";
@@ -1320,13 +1298,7 @@ async function toggleAutostart() {
   } catch (e) { toast(e.message); loadState(); }
 }
 
-// ---------- 设置弹层（统一配置：监听/API-Key/签到/自启/模型路由/备用上游通道） ----------
-//
-// 它取代了旧的「每渠道上游代理」（cfg.proxies，整份替换、漏登记渠道即静默清空）：
-// 现在只有一个**全局**地址，且默认不参与任何请求——全部渠道照常直连，只有渠道自己
-// 判定「这次请求被上游按地区拒绝」时才在同一次请求内取用它重放一次
-// （当前取用方：cline 区域限制模型、oczen RegionError，见 internal/backuplink）。
-// 后端启动时会把旧配置里的 proxies 段一次性迁移到本字段，故前端不必再兼容旧形态。
+// ---------- 设置弹层（统一配置：监听、管理密码、纯签到、开机自启、临期阈值） ----------
 function selectedHost() {
   const v = $("selHost").value;
   if (v !== "__custom__") return v;
@@ -1379,7 +1351,6 @@ function closeSettings() {
   $("settingsOverlay").classList.add("hidden");
 }
 
-// 判据与后端 backuplink.Parse 同口径：http/https/socks5 + 必须有 host。
 async function saveSettings() {
   // 1) 监听地址 + 管理密码（保存即热切换；改密码会使旧会话失效）
   const body = { host: selectedHost(), port: parseInt($("inPort").value, 10) || 0 };
@@ -1449,24 +1420,6 @@ async function saveRename() {
   } catch (e) { toast(e.message); }
 }
 
-// ---------- 模型映射编辑器 ----------
-
-// CHANNEL_PRESETS 各渠道的缺省建议映射（模型为该渠道常用/免费模型）。
-// 用途：未绑定某渠道账号、或不知道该渠道有哪些模型时，给出可点选的起点。
-const CHANNEL_PRESETS = {
-  workbuddy:   { label: "Claude Code → workbuddy",  items: ["claude-* = workbuddy/glm-5.2", "claude-sonnet-* = workbuddy/kimi-k2.7"] },
-  traework:    { label: "Codex → traework",          items: ["gpt-5* = traework/glm-5.2", "codex-* = traework/DeepSeek-V4-Pro"] },
-  // TraeCode 与 TraeWork 共用账号，预设沿用 Codex 语义（面向代码场景的新版模型）。
-  traecode:    { label: "Codex → traecode",          items: ["gpt-5* = traecode/deepseek-v4.1-flash", "codex-* = traecode/glm-5.3-flash"] },
-  workbuddyai: { label: "Claude Code → workbuddyai", items: ["claude-* = workbuddyai/deepseek-v4.1-flash"] },
-  qodercn:     { label: "→ qodercn",                 items: ["gpt-* = qodercn/glm-5.3"] },
-  qodercom:    { label: "→ qodercom",                items: ["gpt-* = qodercom/glm-5.3"] },
-  qwenwork:    { label: "→ qwenwork",                items: ["gpt-* = qwenwork/flash", "claude-* = qwenwork/pro"] },
-  glm:         { label: "→ glm (智谱清言)",           items: ["gpt-* = glm/chatglm", "claude-* = glm/chatglm-think"] },
-  oczen:       { label: "→ oczen (匿名免费)",        items: ["claude-* = oczen/mimo-v2.6-flash-free", "gpt-* = oczen/big-pickle"] },
-};
-
-// 仅列出「已接入（有账号）」的渠道——未绑定的渠道点了也会因无账号而失败，不给误导性入口。
 async function copyText(text, label) {
   try {
     await navigator.clipboard.writeText(text);
@@ -1566,15 +1519,6 @@ function bind() {
   $("btnAdminLogin").onclick = submitLogin;
   $("adminLoginPass").onkeydown = (e) => { if (e.key === "Enter") submitLogin(); };
 
-  $("apiAddr").onclick = () => {
-    const v = $("apiAddr").querySelector(".val").textContent;
-    copyText(v, "OpenAI 接口地址");
-  };
-  $("apiKeyDisplay").onclick = () => {
-    const v = $("apiKeyDisplay").querySelector(".val").textContent;
-    if (v === "（无鉴权）") { toast("当前未设置 API-Key"); return; }
-    copyText(v, "API-Key");
-  };
   // 顶栏齿轮进入统一设置（点击地址/Key 文本仍为复制）
   $("btnSettings").onclick = openSettings;
 

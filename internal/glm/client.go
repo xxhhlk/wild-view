@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"wild-view/internal/auth"
-	"wild-view/internal/idle"
+
 	"wild-view/internal/provider"
 )
 
@@ -31,25 +31,6 @@ type Client struct {
 	// HTTP 用于**非流式**请求（刷新 token / 用户信息 / 积分 / 签到）。
 	// 带 Client.Timeout —— 对这类"一问一答"的接口是合适的。
 	HTTP *http.Client
-
-	// StreamHTTP 用于**对话流**（SSE）。
-	//
-	// ⚠️ **刻意不设 Client.Timeout**。Go 的 `http.Client.Timeout` 覆盖
-	// 整个请求生命周期（含读 body），对流式响应意味着"长回答必被掐断"——
-	// 实测（2026-09-27）：GLM 长回答触发 `context deadline exceeded` 5 次，
-	// 且**没有终止帧**，客户端表现为"回答到一半停住"。
-	//
-	// 流式的正确超时是：
-	//   - ResponseHeaderTimeout（等响应头，防止上游不响应）
-	//   - 连接/读写超时由 Transport 层控制
-	// 只要上游在持续发数据，就不该被掐断。
-	//
-	// 与 traework 的 StreamHTTP 是同一模式（见 internal/traework/client.go）。
-	StreamHTTP *http.Client
-
-	// IdleTimeout 聊天 SSE 流中空闲超时（StreamHTTP 无总时长上限，靠本字段兜底
-	// 「上游中途卡死」）。<=0 表示禁用（测试用）。
-	IdleTimeout time.Duration
 
 	Base string
 
@@ -71,7 +52,7 @@ type cachedToken struct {
 
 // New 生产默认客户端。
 //
-// HTTP 与 StreamHTTP **共享同一个 cookie jar**：清言走阿里云 WAF，POST 类接口依赖
+// HTTP 客户端带统一 cookie jar：清言走阿里云 WAF，POST 类接口依赖
 // acw_tc/cdn_sec_tc 链路（首次请求由响应 Set-Cookie 下发，后续请求必须带回）。
 // 显式拼 Cookie 头会覆盖 jar 导致 WAF cookie 丢失 → 持续 40012，故业务 cookie
 // （chatglm_token 等）也走 jar 注入（见 syncCookies），绝不手写 Cookie 头。
@@ -94,8 +75,8 @@ func New() *Client {
 	return &Client{
 		HTTP: &http.Client{Timeout: requestTimeout, Transport: tr, Jar: jar},
 		// 流式 client：**共用同一 Transport（连接池）与同一 jar**，但不设 Client.Timeout。
-		StreamHTTP:   &http.Client{Transport: tr, Jar: jar},
-		IdleTimeout:  idle.DefaultTimeout, // 流中空闲监控兜底（见 internal/idle）
+
+		// 流中空闲监控兜底（见 internal/idle）
 		Base:         Base,
 		jarURL:       base,
 		accessTokens: map[string]cachedToken{},
@@ -700,10 +681,6 @@ func Classify(status int, body string) provider.ErrKind {
 		return provider.ErrSoftRate
 	case status == http.StatusForbidden:
 		return provider.ErrWafBlock
-	case strings.Contains(lower, "glm_unsupported_conversation"):
-		// ChatStream 本地拒绝（不支持多轮/tool_calls）构造的 400 错误体：
-		// 请求形态问题，与账号健康无关，handler 对 ErrBadParams 原文透传。
-		return provider.ErrBadParams
 	case status >= 500:
 		return provider.ErrServer
 	case status >= 400:

@@ -34,7 +34,6 @@
 package zcode
 
 import (
-	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -47,7 +46,6 @@ import (
 
 	"wild-view/internal/auth"
 	"wild-view/internal/provider"
-	"wild-view/internal/upstream"
 )
 
 // ErrClaimUnsupported 本渠道**不支持自动领取额度**。
@@ -66,15 +64,6 @@ var ErrClaimUnsupported = errors.New(
 // Client 上游 HTTP 客户端。Base / CodingBase / Account 可覆盖以便测试。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**（R35）。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断，
-	// 客户端表现为「突然无响应」。空闲兜底改由 provider.IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 idleTimeout()（默认 600s，含 DSH_ZCODE_SSE_IDLE_TIMEOUT_MS 覆盖）。
-	IdleTimeout time.Duration
 
 	// Base 平台 origin（积分制对话 / 额度 / 目录 / 登录）。
 	Base string
@@ -95,8 +84,8 @@ var _ provider.Upstream = (*Client)(nil)
 func New() *Client {
 	tr := newTransport()
 	return &Client{
-		HTTP:       &http.Client{Timeout: requestTimeout, Transport: tr},
-		StreamHTTP: &http.Client{Transport: tr}, // 共用 Transport，不设 Timeout
+		HTTP: &http.Client{Timeout: requestTimeout, Transport: tr},
+		// 共用 Transport，不设 Timeout
 		Base:       Origin,
 		CodingBase: CodingPlanOrigin,
 	}
@@ -116,7 +105,7 @@ func NewWithBase(base string) *Client {
 
 // newTransport 出厂 Transport：禁 h2 + 连接池 + ResponseHeaderTimeout 兜底。
 //
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到就会无限挂住。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	return &http.Transport{
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{}, // 强制 HTTP/1.1
@@ -144,28 +133,12 @@ func (c *Client) codingOrigin() string {
 	return CodingPlanOrigin
 }
 
-// streamClient 返回流式调用用的客户端（无总超时，回落新建保证 nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
 // businessClient 返回业务端点用的客户端（有总超时）。
 func (c *Client) businessClient() *http.Client {
 	if c.HTTP == nil {
 		c.HTTP = &http.Client{Timeout: requestTimeout, Transport: newTransport()}
 	}
 	return c.HTTP
-}
-
-// effectiveIdleTimeout 生效的空闲超时（未注入时用包级默认/环境变量）。
-func (c *Client) effectiveIdleTimeout() time.Duration {
-	if c.IdleTimeout > 0 {
-		return c.IdleTimeout
-	}
-	return idleTimeout()
 }
 
 // ---------------------------------------------------------------------------
@@ -192,30 +165,6 @@ var channelModelWhitelist = map[channel][]string{
 	channelCodingPlan: {"glm-5.3", "glm-5.3-flash"},
 }
 
-// resolveChannel 选腿：**模型归属 + 凭据可用性**（协议 §1.1 的 `resolveChannelFor` 逐条复刻）。
-//
-// 顺序（照抄参考实现，改动前先读协议 §1.1/§1.6）：
-//  1. 模型属于 start-plan 且凭据有 `zcode_jwt` → start-plan；
-//  2. 模型属于 coding-plan 且凭据有 `coding_plan_key_*` → coding-plan；
-//  3. 其余（模型不在任何白名单、或对应凭据缺失）→ **start-plan**（保守回退：
-//     那是唯一已验证可用的一条腿，参考实现明确「凭据缺失时保守回退而不抛错」）。
-//
-// ⚠ **start-plan 优先**：积分是白给的，不该被订阅额度先消耗掉；两条腿都承载同一模型时
-// （`glm-5.3-flash`），规则 1 先命中。
-// ⚠ **积分制无论账号是 bigmodel 还是 zai 都发 `zcode.z.ai`**，不要因为账号是国际版就改域名。
-func resolveChannel(a *auth.Auth, model string) channel {
-	key := strings.ToLower(strings.TrimSpace(model))
-	jwtOK := a != nil && strings.TrimSpace(a.AccessTokenValue()) != ""
-	codingOK := codingPlanKey(a) != ""
-	if jwtOK && contains(channelModelWhitelist[channelStartPlan], key) {
-		return channelStartPlan
-	}
-	if codingOK && contains(channelModelWhitelist[channelCodingPlan], key) {
-		return channelCodingPlan
-	}
-	return channelStartPlan
-}
-
 // codingPlanKey 取订阅腿的 api-key（zai 优先，其次 bigmodel；协议 §1.2.3）。
 func codingPlanKey(a *auth.Auth) string {
 	if a == nil || a.Extra == nil {
@@ -227,85 +176,9 @@ func codingPlanKey(a *auth.Auth) string {
 	return strings.TrimSpace(a.Extra["coding_plan_key_bigmodel"])
 }
 
-// messagesURL 返回该腿的对话端点。
-func (c *Client) messagesURL(ch channel) string {
-	if ch == channelCodingPlan {
-		return c.codingOrigin() + "/api/anthropic/v1/messages"
-	}
-	return c.origin() + EpZCodePlanMessages
-}
-
 // ---------------------------------------------------------------------------
 // provider.Upstream：对话
 // ---------------------------------------------------------------------------
-
-// ChatStream 把 OpenAI Chat 请求体翻成 Anthropic Messages 方言后转发。
-//
-// 返回约定（与其它渠道一致，handler 依赖它做分类与透传）：
-//   - 传输错误            → (nil, 0, nil, err)
-//   - HTTP ≥ 400          → (nil, status, 上游原始响应体, nil)   ← 原文透传，不包装
-//   - 200                 → (带空闲看门狗的 body, 200, nil, nil)
-//
-// 两类**本地**失败（都不打上游）：
-//   - 出站体不可构造（请求 JSON 非法 / 消息为空 / 图片读不到 / 模型不支持图片）
-//     → 本地 400 + code `bad_params`（请求级：不罚号、不轮换、原文透传）；
-//   - **身份块前置校验失败** → 本地 405 + code 3012 语义的错误体（见身份块注释：
-//     上游同条件会回 405 + 3012 并给账号记风控冷却，故宁可本地拦下）。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
-	model := upstreamModelName(modelOf(body))
-	entry, known := c.catalogEntry(model)
-	out, berr := buildMessagesBody(body, entry, known)
-	if berr != nil {
-		return nil, http.StatusBadRequest, badParamsBody(berr), nil
-	}
-	// ★ 本地准入门槛：确认即将发出的请求体真的内嵌了官方身份块。
-	if err := verifyOutboundIdentity(out); err != nil {
-		return nil, http.StatusMethodNotAllowed, identityGateBody(err), nil
-	}
-
-	ch := resolveChannel(a, model)
-	authorization := "Bearer " + tokenOf(a)
-	if ch == channelCodingPlan {
-		authorization = "Bearer " + codingPlanKey(a)
-	}
-	req, err := http.NewRequest(http.MethodPost, c.messagesURL(ch), bytes.NewReader(out))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	req.Header = zcodeHeaders(a, authorization, true)
-	if ch == channelCodingPlan {
-		// 订阅腿不带 HTTP-Referer（协议 §1.2.3 实测：api.z.ai 只认
-		// Authorization + anthropic-version）。
-		req.Header.Del(HdrReferer)
-	}
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 aggregate 路径共用这一层（聚合时由「总时长上限」变为「空闲上限」）。
-	return provider.NewIdleReader(resp.Body, c.effectiveIdleTimeout()), resp.StatusCode, nil, nil
-}
-
-// Stream 把上游流（Anthropic SSE）转成 OpenAI SSE 后交给统一规范化层。
-// model 是客户端请求的原始模型名，用于回填每个 chunk 的 model 字段。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	var usage map[string]any
-	err := upstream.StreamCapture(w, newAnthropicStream(r, model), func(u map[string]any) { usage = u })
-	return usage, err
-}
-
-// Aggregate 把上游流收敛成单个 OpenAI chat.completion 响应（非流式客户端走这里）。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) {
-	return upstream.Aggregate(newAnthropicStream(r, model))
-}
 
 // ---------------------------------------------------------------------------
 // provider.Upstream：续期
@@ -746,45 +619,4 @@ func tokenOf(a *auth.Auth) string {
 		return ""
 	}
 	return strings.TrimSpace(a.AccessTokenValue())
-}
-
-// modelOf 取请求体里的 model。
-func modelOf(body []byte) string {
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return ""
-	}
-	return probe.Model
-}
-
-// badParamsBody 本地出站体拒绝的错误体（OpenAI 风格）。
-// code=bad_params 让上层 Classify 归到请求级错误：不罚号、不轮换、原文透传给客户端。
-func badParamsBody(err error) []byte {
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": "zcode：" + err.Error(),
-		"type":    "invalid_request_error",
-		"code":    "bad_params",
-	}})
-	return b
-}
-
-// identityGateBody 身份块前置校验失败时的错误体。
-//
-// 为什么用 **405**：与上游同条件的形态对齐（上游回 HTTP 405 + `{"code":3012}`），
-// 便于排障时一眼认出「这是身份块问题」。
-//
-// 为什么 code 用 `bad_params` 而不是 `3012`：这次失败**发生在本机**（请求根本没发出去），
-// 它是请求构造层的缺陷，不是账号被风控。若写成 3012，上层会把它当账号级风控去换号/冷却，
-// 等于用本地 bug 惩罚健康账号。故如实标注：本地归类 bad_params（请求级），
-// 并在文案里说明上游同条件会回 405 + 3012。
-func identityGateBody(err error) []byte {
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": "zcode：出站请求体未通过身份块前置校验，已本地拦截（上游同条件会回 HTTP 405 + " +
-			"code 3012，且有账号冷却惩罚）：" + err.Error(),
-		"type": "invalid_request_error",
-		"code": "bad_params",
-	}})
-	return b
 }

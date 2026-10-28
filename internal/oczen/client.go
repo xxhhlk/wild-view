@@ -7,14 +7,14 @@ package oczen
 
 import (
 	"bufio"
-	"bytes"
+
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
+
 	"math/big"
 	"net"
 	"net/http"
@@ -24,30 +24,15 @@ import (
 	"time"
 
 	"wild-view/internal/auth"
-	"wild-view/internal/backuplink"
-	"wild-view/internal/idle"
+
 	"wild-view/internal/provider"
-	"wild-view/internal/upstream"
 )
 
 // Client 上游 HTTP 客户端。Base 可覆盖以便测试。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断
-	// （本渠道非流式超时较宽，10 分钟，但同样会截断超过它的流）。空闲兜底改由
-	// IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 禁用流空闲监控（测试用）。本渠道**没有**对应配置项，恒取 New() 里的
-	// DefaultIdleTimeout（90s）——本渠道不计入 main 的 cfg.StreamIdleDur 注入清单。
-	IdleTimeout time.Duration
-	Base        string
 
-	// routes 地区限制学习路由（与 cline 共用 backuplink.Routes / Replay 编排，R62）。
-	routes backuplink.Routes
+	Base string
 
 	// mu 保护 apikey 的并发读写（面板热更新与请求路径并发）。
 	mu sync.RWMutex
@@ -56,26 +41,20 @@ type Client struct {
 	apiKey string
 }
 
-// DefaultIdleTimeout 流式空闲超时默认值。
-//
-// 实测正常请求 8~40s 完成（同一模型），90s 足够宽松——只拦「真的一个字节都不出」。
-const DefaultIdleTimeout = 90 * time.Second
-
 // New 生产默认客户端。
 //
 // 刻意**不**设 Base：留空由 base() 按凭证车道选择（匿名 → AnonymousBase，
 // 自备 key → DefaultBase）。设成 DefaultBase 会把匿名车道钉在 /zen 上，
 // 正是 issue #117 的恒 403 形态（R69）。
 func New() *Client {
-	return &Client{HTTP: &http.Client{Timeout: requestTimeout, Transport: newTransport()},
-		StreamHTTP:  &http.Client{Transport: newTransport()}, // 无总超时；空闲兜底见 internal/idle
-		IdleTimeout: DefaultIdleTimeout,                      // 流中空闲监控兜底（未注入时用本仓默认 90s）
-	}
+	return &Client{HTTP: &http.Client{Timeout: requestTimeout, Transport: newTransport()}} // 无总超时；空闲兜底见 internal/idle
+	// 流中空闲监控兜底（未注入时用本仓默认 90s）
+
 }
 
 // newTransport 出厂 Transport：禁 h2 + 连接池 + ResponseHeaderTimeout 兜底。
 //
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到就会无限挂住。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 15 * time.Second}
 	return &http.Transport{
@@ -87,14 +66,6 @@ func newTransport() *http.Transport {
 		IdleConnTimeout:       30 * time.Second,
 		ResponseHeaderTimeout: 120 * time.Second,
 	}
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 // NewWithBase 测试用：覆盖上游基址。
@@ -224,77 +195,6 @@ func randomID(prefix string, size int) string {
 	return prefix + "_" + hex.EncodeToString(buf)
 }
 
-// conversationSeed 取首个 user 消息的 content 作为会话种子：
-// 多轮对话中历史不断增长，取首轮可保证同一对话映射到同一会话（prompt cache 亲和），
-// 不同对话则自然分开。
-func conversationSeed(obj map[string]any) string {
-	msgs, _ := obj["messages"].([]any)
-	for _, raw := range msgs {
-		m, ok := raw.(map[string]any)
-		if !ok || m["role"] != "user" {
-			continue
-		}
-		if b, err := json.Marshal(m["content"]); err == nil && len(b) > 0 && string(b) != "null" {
-			return string(b)
-		}
-	}
-	return ""
-}
-
-// stubTool 免费档要求的桩工具（bash / read）。参数与描述不参与校验，
-// 但给出可辨识的名字以便模型/客户端区分。
-func stubTool(name string) map[string]any {
-	switch name {
-	case "bash":
-		return map[string]any{"type": "function", "function": map[string]any{
-			"name": "bash", "description": "(internal placeholder — do not call)",
-			"parameters": map[string]any{"type": "object", "properties": map[string]any{
-				"command": map[string]any{"type": "string"}}}}}
-	default:
-		return map[string]any{"type": "function", "function": map[string]any{
-			"name": "read", "description": "(internal placeholder — do not call)",
-			"parameters": map[string]any{"type": "object", "properties": map[string]any{
-				"filePath": map[string]any{"type": "string"}}}}}
-	}
-}
-
-// ensureAgentShape 就地改写请求体以通过免费档校验：
-//   - 强制 stream=true（上游免费档只接受流式；非流式客户端由 Aggregate 本地聚合）；
-//   - tools 内补齐缺失的 bash/read 桩工具（客户端没带 tools 时同时置 tool_choice=none，
-//     避免模型真的去调桩工具；客户端自带工具时保留其 tool_choice，否则会破坏工具调用）。
-//
-// 返回被强制改过的标记仅供测试断言。
-func ensureAgentShape(obj map[string]any) {
-	obj["stream"] = true
-
-	tools, _ := obj["tools"].([]any)
-	have := map[string]bool{}
-	for _, raw := range tools {
-		t, ok := raw.(map[string]any)
-		if !ok || t["type"] != "function" {
-			continue
-		}
-		fn, ok := t["function"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if n, ok := fn["name"].(string); ok {
-			have[n] = true
-		}
-	}
-	hadTools := len(tools) > 0
-	for _, name := range stubToolNames {
-		if !have[name] {
-			tools = append(tools, stubTool(name))
-		}
-	}
-	obj["tools"] = tools
-	if !hadTools {
-		// 纯聊天：客户端没有工具语义，桩工具仅供上游过检，明确禁止调用。
-		obj["tool_choice"] = "none"
-	}
-}
-
 // authKey 返回当前出站凭证：自定义 key 优先，空则回匿名。
 func (c *Client) authKey() string {
 	c.mu.RLock()
@@ -351,75 +251,6 @@ func clientProjectID(session string) string {
 // provider.Upstream 实现
 // ---------------------------------------------------------------------------
 
-// ChatStream 改写客户端请求体后转发到 Zen。上游恒为流式，非流式客户端由 Aggregate 收敛。
-//
-// 地区限制自动改道（R62）：直连命中 RegionError 时，在同一次请求内经**备用上游通道**重放一次；
-// 未配置则原样透传。编排与 cline 共用 backuplink.Replay（判据/首因保留/学习路由只有一份实现）。
-func (c *Client) ChatStream(_ *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return nil, 0, nil, fmt.Errorf("oczen: invalid request body: %w", err)
-	}
-	ensureAgentShape(obj)
-	// 会话标识由对话首轮稳定派生；缺 seed 时随机（单次会话，无亲和需求）。
-	seed := conversationSeed(obj)
-	if seed == "" {
-		seed = randomID("fallback", 16)
-	}
-	session := canonicalSessionID(seed)
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("oczen: marshal body: %w", err)
-	}
-	model, _ := obj["model"].(string)
-
-	// 每次 attempt 重新构造请求（体已在内存，重放无需 GetBody）。
-	// cancel 所有权随**本次响应**走：在本函数内包好 idle.Monitor（空闲兜底 + 关闭时取消），
-	// 非 200/传输错误路径就地 cancel。如此不依赖「最后一次 attempt 恰好就是成功那次」这一
-	// 隐式顺序（编排可能连发 1~3 次：直连→备用→回落直连），也避免 ErrNoBackup 等
-	// 提前返回路径漏调 cancel 而泄漏 context。
-	attempt := func(useBackup bool) (*http.Response, error) {
-		req, err := http.NewRequest(http.MethodPost, c.base()+"/chat/completions", bytes.NewReader(out))
-		if err != nil {
-			return nil, err
-		}
-		c.headered(req, session)
-		req, cancel := idle.WithCancel(req)
-		hc := c.HTTP
-		if c.StreamHTTP != nil {
-			hc = c.StreamHTTP
-		}
-		if useBackup {
-			tr, _ := hc.Transport.(*http.Transport)
-			bc := backuplink.Client(tr)
-			if bc == nil {
-				cancel()
-				return nil, backuplink.ErrNoBackup
-			}
-			hc = bc
-		}
-		resp, err := hc.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			cancel() // 失败分支在本函数内收尾；200 的取消权随 resp 交给下面的 Monitor
-			return resp, err
-		}
-		resp.Body = idle.Monitor(resp.Body, c.IdleTimeout, cancel) // 流空闲兜底 + 取消权转移
-		return resp, nil
-	}
-
-	rp := &backuplink.Replay{
-		Kind:    "oczen",
-		Model:   model,
-		Routes:  &c.routes,
-		Attempt: attempt,
-		Blocked: IsRegionBlocked,
-		// 不需要 Wrap：200 的 body 已在 attempt 内包好 idle.Monitor（取消权随响应走）。
-		// 旧实现用 1MB 读错误体（上游错误详情偶尔较长），保持原值以免削弱「原文透传」。
-		MaxErrBody: 1 << 20,
-	}
-	return rp.Do()
-}
-
 // regionBlockedMarkers 是「换出口 IP 有可能救回来」的拒绝文案（触发备用通道重放）。
 //
 // 实测形态：
@@ -443,77 +274,6 @@ var regionBlockedMarkers = []string{
 	"geoblock",
 	"abusive traffic",                     // FreeTierError：出口 IP 被判定滥用（换 IP 可解）
 	"available from your current network", // FreeTierError：网络/出口级不可用（换 IP 可解）
-}
-
-// IsRegionBlocked 报告响应是否属于「地域限制」（可尝试经备用通道重试）。
-// 状态码限 403/451：其余状态一律不认（保守，避免把限流/风控误发到第三方出口）。
-func IsRegionBlocked(status int, body string) bool {
-	if status != http.StatusForbidden && status != http.StatusUnavailableForLegalReasons {
-		return false
-	}
-	low := strings.ToLower(body)
-	for _, m := range regionBlockedMarkers {
-		if strings.Contains(low, m) {
-			return true
-		}
-	}
-	return false
-}
-
-// TestKey 用 big-pickle 模型发一次最小对话验证凭证可用性。
-// 返回 (status, 上游原文片段, viaBackup, error)。判定口径（面板展示用）：
-//   - 200：key 有效且配额正常；
-//   - 429：key 有效但触发限流（匿名共享配额或临时背压）——也算「连通」；
-//   - 401/403：key 无效、免费档形态不符或被风控；402：付费模型余额不足；
-//   - 503：上游端点故障（key 无法判定，连接是通的）。
-//
-// 与 ChatStream 同一条编排（R62 的补充）：直连被地域拒（403/451 + RegionError 文案）时
-// **同样**经备用上游通道重放一次——否则用户点了「测试」看到 403，就无从判断是「备用通道
-// 没生效」还是「上游本来就不给这个出口用」（issue #117）。viaBackup 报告本次答复是否
-// 来自备用出口，供面板如实展示「经备用通道」。
-func (c *Client) TestKey() (status int, body string, viaBackup bool, err error) {
-	obj := map[string]any{
-		"model":      "big-pickle",
-		"stream":     true,
-		"max_tokens": 8,
-		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
-	}
-	ensureAgentShape(obj)
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return 0, "", false, err
-	}
-	session := canonicalSessionID(randomID("testkey", 8))
-	via := false
-	attempt := func(useBackup bool) (*http.Response, error) {
-		req, err := http.NewRequest(http.MethodPost, c.base()+"/chat/completions", bytes.NewReader(out))
-		if err != nil {
-			return nil, err
-		}
-		c.headered(req, session)
-		hc := c.HTTP
-		if useBackup {
-			tr, _ := hc.Transport.(*http.Transport)
-			bc := backuplink.Client(tr)
-			if bc == nil {
-				return nil, backuplink.ErrNoBackup
-			}
-			hc = bc
-		}
-		return hc.Do(req)
-	}
-	rp := &backuplink.Replay{Kind: "oczen-test", Model: "big-pickle", Routes: &c.routes, Attempt: attempt, Blocked: IsRegionBlocked, MaxErrBody: 4 << 10,
-		Note: func(v bool) { via = v }} // 学习路由 + 本次答复出口标记：两者都要（issue #117）
-	rc, st, raw, rerr := rp.Do()
-	if rerr != nil {
-		return 0, "", via, rerr
-	}
-	if rc != nil { // 200：读尽小片段后关闭（上游恒流式，同 ChatStream）
-		defer rc.Close()
-		b, _ := io.ReadAll(io.LimitReader(rc, 4<<10))
-		return st, string(b), via, nil
-	}
-	return st, string(raw), via, nil
 }
 
 // FetchModels 拉取上游模型列表并只保留免费集合。
@@ -602,10 +362,6 @@ func (c *Client) DailyCheckin(_ *auth.Auth) error {
 //     原文透传、不计错不冷却 —— 这些是请求形态/地域限制，换账号无从规避；
 //     尤其不得归 ErrSessionDead：那会 pool.Disable 永久禁用，而匿名账号不可重登；
 //   - 5xx → ErrServer（server.Runtime 已置 NoCooldownOnServerError，同样不罚账号）。
-//
-// 注：RegionError 现在**多半到不了这里**——ChatStream 会在渠道内部先经备用上游通道
-// 重放一次（R62），成功则客户端拿到 200。只有「未配备用通道 / 备用也受限 / 备用拨不动」
-// 才会把 403 原文交给 handler，此时本条归 ErrPassthrough 的语义仍然正确（不罚账号）。
 func (c *Client) Classify(status int, body string) provider.ErrKind {
 	switch {
 	case status == http.StatusTooManyRequests:
@@ -619,53 +375,6 @@ func (c *Client) Classify(status int, body string) provider.ErrKind {
 	}
 }
 
-// SystemOne 调用 jev 决策模型端点（POST /v1/systemone）。
-// 透传 state+questions，自动注入 model、规范 criteria 并附加伪装头。
-// 返回上游原始 JSON 响应体（非流式）；status>=400 时 body 为错误详情。
-func (c *Client) SystemOne(state string, questions map[string]any) (int, []byte, error) {
-	body := map[string]any{
-		"model":     "jev-1.13-free",
-		"state":     state,
-		"questions": questions,
-	}
-	out, err := json.Marshal(body)
-	if err != nil {
-		return 0, nil, fmt.Errorf("oczen systemone marshal: %w", err)
-	}
-	req, err := http.NewRequest(http.MethodPost, c.base()+"/systemone", bytes.NewReader(out))
-	if err != nil {
-		return 0, nil, err
-	}
-	c.headered(req, canonicalSessionID(randomID("sysone", 8)))
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	return resp.StatusCode, raw, nil
-}
-
-// Stream 透传上游 SSE，并把 model 字段回填成客户端请求的原始模型名（R14）。
-// 返回值为末帧捕获的 usage（供记账，上游未返回时为 nil）。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	var usage map[string]any
-	err := upstream.StreamCapture(w, rewriteModelReader(r, model), func(u map[string]any) { usage = u })
-	return usage, err
-}
-
-// Aggregate 把上游 SSE 收敛成单个 OpenAI 响应，同样回填客户端模型名。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) {
-	resp, err := upstream.Aggregate(r)
-	if err != nil {
-		return nil, err
-	}
-	if model != "" {
-		resp["model"] = model
-	}
-	return resp, nil
-}
-
 // ---------------------------------------------------------------------------
 // model 字段回填
 // ---------------------------------------------------------------------------
@@ -677,56 +386,4 @@ type modelRewriter struct {
 	src     *bufio.Reader
 	pending []byte // 已读入但尚未吐出的当前行缓冲
 	model   string
-}
-
-func rewriteModelReader(r io.Reader, model string) io.Reader {
-	if model == "" {
-		return r
-	}
-	return &modelRewriter{src: bufio.NewReaderSize(r, 64*1024), model: model}
-}
-
-// Read 以「行」为单位吐数据：一次吐一行（含尾部换行），保持 SSE 帧边界完整。
-func (m *modelRewriter) Read(p []byte) (int, error) {
-	for len(m.pending) == 0 {
-		line, err := m.src.ReadBytes('\n')
-		if len(line) > 0 {
-			m.pending = rewriteModelLine(line, m.model)
-		}
-		if err != nil {
-			if len(m.pending) == 0 {
-				return 0, err
-			}
-			break
-		}
-	}
-	n := copy(p, m.pending)
-	m.pending = m.pending[n:]
-	return n, nil
-}
-
-// rewriteModelLine 替换单行内所有 "model":"..." 的值。
-func rewriteModelLine(line []byte, model string) []byte {
-	needle := []byte(`"model":"`)
-	out := line
-	from := 0
-	for {
-		i := bytes.Index(out[from:], needle)
-		if i < 0 {
-			return out
-		}
-		start := from + i + len(needle)
-		end := bytes.IndexByte(out[start:], '"')
-		if end < 0 {
-			return out
-		}
-		end += start
-		// 已替换段不会再次命中 needle（模型名不含 `"model":"`），从替换点之后继续扫描
-		repl := make([]byte, 0, len(out)-(end-start)+len(model))
-		repl = append(repl, out[:start]...)
-		repl = append(repl, model...)
-		repl = append(repl, out[end:]...)
-		out = repl
-		from = start + len(model)
-	}
 }

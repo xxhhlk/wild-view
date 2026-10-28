@@ -62,10 +62,6 @@ const (
 // 面板的「同账号多 Key 不扩额度」告警也用它比对（app.SubmitClineKey）。
 const KeyPrefixLen = 10
 
-// DefaultIdleTimeout 无 config 注入时的流式空闲上限。
-// ⚠️ 生产恒取本值：配置项不存在（见 Client.IdleTimeout 注释）。
-const DefaultIdleTimeout = 90 * time.Second
-
 // FarFutureExpiry Key 无过期概念。ExpiresAt 必须给远期值而**不得为 0**：
 // 0 会让 auth.NeedsRefresh 恒真 ⇒ 每次请求都尝试刷新（不变量 21 的同款陷阱）。
 func FarFutureExpiry() int64 { return time.Now().AddDate(80, 0, 0).Unix() }

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"io"
-	"net/http"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -30,10 +29,6 @@ func (f *fakeUpstream) RefreshToken(a *auth.Auth) error {
 	f.refreshCalls.Add(1)
 	f.sessionDead.Store(false) // 刷新即恢复
 	return nil
-}
-
-func (f *fakeUpstream) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
-	return nil, 200, nil, nil
 }
 
 func (f *fakeUpstream) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) { return nil, nil }
@@ -64,16 +59,6 @@ func (f *fakeUpstream) UserResourceDetail(a *auth.Auth) (int64, []provider.Resou
 }
 
 func (f *fakeUpstream) DailyCheckin(a *auth.Auth) error { return nil }
-
-func (f *fakeUpstream) Classify(status int, body string) provider.ErrKind {
-	return provider.ErrNone
-}
-
-func (f *fakeUpstream) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	return nil, nil
-}
-
-func (f *fakeUpstream) Aggregate(r io.Reader, model string) (map[string]any, error) { return nil, nil }
 
 // newTestApp 构造仅含单个渠道的最小 App。
 func newTestApp(t *testing.T, kind provider.Kind, up provider.Upstream, uid string) (*App, *pool.Pool) {

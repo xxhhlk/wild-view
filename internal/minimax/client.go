@@ -28,21 +28,12 @@ import (
 
 	"wild-view/internal/auth"
 	"wild-view/internal/provider"
-	"wild-view/internal/upstream"
 )
 
 // Client 上游 HTTP 客户端。Base / Account 可覆盖以便测试。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**（R35）。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断，
-	// 客户端表现为「突然无响应」。空闲兜底改由 provider.IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout（本包没有配置项，main 也不注入）。
-	IdleTimeout time.Duration
+
 	// Base API 主机（目录 / 推理 / 签到 / 积分），默认 APIHost。
 	Base string
 	// Account 账号 / OAuth 主机，默认 AccountHost。
@@ -58,10 +49,10 @@ type Client struct {
 func New() *Client {
 	tr := newTransport()
 	return &Client{
-		HTTP:       &http.Client{Timeout: requestTimeout, Transport: tr},
-		StreamHTTP: &http.Client{Transport: tr}, // 共用 Transport，不设 Timeout
-		Base:       APIHost,
-		Account:    AccountHost,
+		HTTP: &http.Client{Timeout: requestTimeout, Transport: tr},
+		// 共用 Transport，不设 Timeout
+		Base:    APIHost,
+		Account: AccountHost,
 	}
 }
 
@@ -74,7 +65,7 @@ func NewWithBase(base string) *Client {
 
 // newTransport 出厂 Transport：禁 h2 + 连接池 + ResponseHeaderTimeout 兜底。
 //
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到就会无限挂住。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	return &http.Transport{
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{}, // 强制 HTTP/1.1
@@ -102,80 +93,9 @@ func (c *Client) accountHost() string {
 	return AccountHost
 }
 
-// streamClient 返回流式调用用的客户端（无总超时，回落新建保证 nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
-}
-
 // ---------------------------------------------------------------------------
 // provider.Upstream：对话
 // ---------------------------------------------------------------------------
-
-// ChatStream 把 OpenAI Chat 请求体翻成 Anthropic Messages 方言后转发。
-//
-// 返回约定（与其它渠道一致，handler 依赖它做分类与透传）：
-//   - 传输错误            → (nil, 0, nil, err)
-//   - HTTP ≥ 400          → (nil, status, 上游原始响应体, nil)   ← 原文透传，不包装
-//   - 200                 → (带空闲看门狗的 body, 200, nil, nil)
-//
-// 出站体不可构造（请求 JSON 非法 / 消息为空 / 图片读不到 / 模型不支持图片）时返回
-// **本地 400 + 错误体**而不是 err：err 会被 handler 当成传输层错误而去
-// `Pool.NoteError` 并换号重试——那是在为客户端的问题惩罚健康账号；
-// 本地 400 走 status≥400 分支，Classify 把它归到 ErrBadParams（请求级、不罚号、不轮转）。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
-	model := upstreamModelName(modelOf(body))
-	entry, known := c.catalogEntry(model)
-	out, berr := buildMessagesBody(body, entry, known)
-	if berr != nil {
-		return nil, http.StatusBadRequest, badParamsBody(berr), nil
-	}
-	req, err := http.NewRequest(http.MethodPost, c.apiHost()+EpMessages, bytes.NewReader(out))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+tokenOf(a))
-	req.Header.Set("Content-Type", "application/json")
-	// 只需要这三个头：**不需要 anthropic-version，也不需要 machine 头或签名**
-	// （协议 §2 明确列出，实测只带上述头即 HTTP 200）。
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 aggregate 路径共用这一层（聚合时由「总时长上限」变为「空闲上限」）。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
-}
-
-// Stream 把上游流（Anthropic SSE）转成 OpenAI SSE 后交给统一规范化层。
-// model 是客户端请求的原始模型名，用于回填每个 chunk 的 model 字段。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	var usage map[string]any
-	err := upstream.StreamCapture(w, newAnthropicStream(r, model), func(u map[string]any) { usage = u })
-	return usage, err
-}
-
-// Aggregate 把上游流收敛成单个 OpenAI chat.completion 响应（非流式客户端走这里）。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) {
-	return upstream.Aggregate(newAnthropicStream(r, model))
-}
 
 // ---------------------------------------------------------------------------
 // provider.Upstream：续期
@@ -504,28 +424,6 @@ func tokenOf(a *auth.Auth) string {
 		return ""
 	}
 	return strings.TrimSpace(a.AccessTokenValue())
-}
-
-// modelOf 取请求体里的 model。
-func modelOf(body []byte) string {
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return ""
-	}
-	return probe.Model
-}
-
-// badParamsBody 本地出站体拒绝的错误体（OpenAI 风格）。
-// code=bad_params 让上层 Classify 归到请求级错误：不罚号、不轮换、原文透传给客户端。
-func badParamsBody(err error) []byte {
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": "minimax：" + err.Error(),
-		"type":    "invalid_request_error",
-		"code":    "bad_params",
-	}})
-	return b
 }
 
 // oauthErrorMessage 取 OAuth 错误响应里的可读文本（error / error_description）。

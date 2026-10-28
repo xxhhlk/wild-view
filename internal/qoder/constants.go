@@ -21,7 +21,6 @@ const (
 	EpUserInfo   = "/api/v1/userinfo"
 	EpDTRefresh  = "/api/v1/deviceToken/refresh"
 	EpModels     = "/algo/api/v2/model/list?Encode=1"
-	EpChat       = "/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 
 	clientUA = "Go-http-client/2.0"
 )
@@ -56,9 +55,4 @@ func StaticModels() []provider.ModelInfo {
 		out = append(out, provider.ModelInfo{ID: k, ContextWindow: 180000})
 	}
 	return out
-}
-
-// ModelKey 返回客户端模型名对应的上游 model key（静态表兜底；未知模型返回空）。
-func ModelKey(clientName string) string {
-	return staticModelKeys[clientName]
 }

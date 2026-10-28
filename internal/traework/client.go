@@ -48,18 +48,10 @@ func Classify(status int, body string) provider.ErrKind {
 // Client Trae SOLO 上游 HTTP 客户端。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断。
-	// 空闲兜底改由 IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout。由 main 装配时注入 config.upstream.stream_idle_seconds。
-	IdleTimeout time.Duration
-	AgentHost   string
-	UgHost      string
-	OAuthHost   string
+
+	AgentHost string
+	UgHost    string
+	OAuthHost string
 	// PricingHost 定价接口基址；空则回落到 WorkHost。
 	// 单列为字段是为了让测试可指向本地 mock。
 	PricingHost       string
@@ -76,22 +68,9 @@ type Client struct {
 	PricingPrimary string
 }
 
-// DefaultIdleTimeout 流式空闲超时默认值。
-//
-// 实测正常请求 8~40s 完成（同一模型），90s 足够宽松——只拦「真的一个字节都不出」。
-const DefaultIdleTimeout = 90 * time.Second
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
-}
-
 func New() *Client {
 	tr := &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 20, IdleConnTimeout: 90 * time.Second, ResponseHeaderTimeout: 120 * time.Second}
-	return &Client{HTTP: &http.Client{Timeout: 120 * time.Second, Transport: tr}, StreamHTTP: &http.Client{Transport: tr}, AgentHost: AgentHost, UgHost: UgHost, OAuthHost: OAuthHost, PricingHost: WorkHost, ClientID: ClientID, CheckinRetryDelay: 8 * time.Second, Function: Function, PricingFunctions: PricingFunctionsWork, PricingChannel: "traework", PricingPrimary: PricingPrimaryWork}
+	return &Client{HTTP: &http.Client{Timeout: 120 * time.Second, Transport: tr}, AgentHost: AgentHost, UgHost: UgHost, OAuthHost: OAuthHost, PricingHost: WorkHost, ClientID: ClientID, CheckinRetryDelay: 8 * time.Second, Function: Function, PricingFunctions: PricingFunctionsWork, PricingChannel: "traework", PricingPrimary: PricingPrimaryWork}
 }
 
 // NewTraeCode 返回 TraeCode（代码版）专用 Client：function=solo_agent。
@@ -214,35 +193,6 @@ func normalizeExpiresAt(v int64) int64 {
 		return v / 1000
 	}
 	return v
-}
-
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	prepared := PrepareBody(body, c.Function)
-	req, err := http.NewRequest(http.MethodPost, c.agentBase()+EpChat, bytes.NewReader(prepared))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	SOLOHeaders(req, a, true)
-	hc := c.HTTP
-	if c.StreamHTTP != nil {
-		hc = c.StreamHTTP
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		log.Printf("traework chat_stream uid=%s: transport error: %v", a.UID, err)
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		kind := Classify(resp.StatusCode, string(raw))
-		log.Printf("traework chat_stream uid=%s: upstream %d %s body=%s req=%s", a.UID, resp.StatusCode, kind, provider.LogBody(string(raw)), provider.LogParams(prepared))
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 stream:false 的聚合路径共用这一层（聚合时由「总时长硬上限」
-	// 变为「空闲上限」，长而持续输出的响应不再被误杀）。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
 }
 
 func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
@@ -807,12 +757,6 @@ func (c *Client) GetUserInfo(a *auth.Auth) (uid, nickname, enterpriseID string, 
 }
 
 func (c *Client) Classify(status int, body string) provider.ErrKind { return Classify(status, body) }
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	return StreamWithModel(w, r, model)
-}
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) {
-	return AggregateWithModel(r, model)
-}
 
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)

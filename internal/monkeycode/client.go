@@ -11,7 +11,6 @@
 package monkeycode
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -28,41 +27,27 @@ import (
 
 	"wild-view/internal/auth"
 	"wild-view/internal/provider"
-	"wild-view/internal/upstream"
 )
 
 // Client 上游 HTTP 客户端。Base 可覆盖以便测试。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断。
-	// 客户端表现为「突然无响应」。空闲兜底改由 IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout。⚠️ 目前**没有配置项**（main 不注入），实际恒为默认值。
-	IdleTimeout time.Duration
-	Base        string
+
+	Base string
 	// Console 控制台站点（钱包等 Cookie 认证接口）；空则用 consoleBase。
 	Console string
 	// Baizhi 百智云站点（派生控制台会话的授权端点）；空则用 baizhiBase。
 	Baizhi string
 }
 
-// DefaultIdleTimeout 流式空闲超时默认值。
-//
-// 实测正常请求 8~40s 完成（同一模型），90s 足够宽松——只拦「真的一个字节都不出」。
-const DefaultIdleTimeout = 90 * time.Second
-
 // New 生产默认客户端。
 func New() *Client {
-	return &Client{HTTP: &http.Client{Timeout: requestTimeout, Transport: newTransport()}, StreamHTTP: &http.Client{Transport: newTransport()}, Base: DefaultBase, Console: consoleBase}
+	return &Client{HTTP: &http.Client{Timeout: requestTimeout, Transport: newTransport()}, Base: DefaultBase, Console: consoleBase}
 }
 
 // newTransport 出厂 Transport：禁 h2 + 连接池 + ResponseHeaderTimeout 兜底。
 //
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到就会无限挂住。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 15 * time.Second}
 	return &http.Transport{
@@ -74,22 +59,6 @@ func newTransport() *http.Transport {
 		IdleConnTimeout:       30 * time.Second,
 		ResponseHeaderTimeout: 120 * time.Second,
 	}
-}
-
-// streamClient 返回流式调用用的客户端（无总超时，回落新建保证 nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 // NewWithBase 测试用：覆盖上游基址。
@@ -164,128 +133,9 @@ func modelInfos() []provider.ModelInfo {
 	return out
 }
 
-// modelAllowed 报告模型是否属于本渠道托管清单。
-// 未知模型**必须本地拒绝**：上游对未知模型会静默回落到默认模型并返回 200，
-// 不校验就等于静默烧额度（同 raccoon / loomy 的硬约束）。
-func modelAllowed(id string) bool {
-	return staticSet[bareModelID(id)]
-}
-
-// unknownModelBody 未知模型的本地 400（OpenAI 风格，不请求上游）。
-func unknownModelBody(m string) []byte {
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": fmt.Sprintf("monkeycode: 未知模型 %q。上游对未知模型会静默回落到默认模型，故本地直接拒绝；可用模型见 GET /v1/models", m),
-		"type":    "invalid_request_error",
-		"code":    "model_not_found",
-	}})
-	return b
-}
-
 // ---------------------------------------------------------------------------
 // provider.Upstream 实现
 // ---------------------------------------------------------------------------
-
-// ChatStream 把 OpenAI Chat 请求体翻成上游方言（Anthropic Messages 或
-// OpenAI Responses，取决于模型），注入签名后转发。
-//
-// 两条路径的差异（2026-09-24 实测，见评估文档 §3.9）：
-//
-//	anthropic 型：POST {base}/messages，签名对象 = system[0].text
-//	responses 型：POST {base}/responses，签名对象 = input[0](role=system).content
-//
-// 两处的签名对象都是同一个固定常量 signatureSystemPrompt，故签名值相同、共用缓存。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
-	model := modelOf(body)
-	if !modelAllowed(model) {
-		return nil, http.StatusBadRequest, unknownModelBody(model), nil
-	}
-	useResponses := usesResponsesAPI(model)
-
-	var (
-		out  []byte
-		path string
-		err  error
-	)
-	if useResponses {
-		out, err = buildResponsesBody(body)
-		path = "/responses"
-	} else {
-		out, err = buildAnthropicBody(body)
-		path = "/messages"
-	}
-	if err != nil {
-		return nil, 0, nil, err
-	}
-
-	sig, err := signatureFor(secretOf(a))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	req, err := http.NewRequest(http.MethodPost, c.base(a)+path, bytes.NewReader(out))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("X-Api-Key", apiKeyOf(a))
-	req.Header.Set(SignatureHeader, sig)
-	if !useResponses {
-		// Responses 面不需要 anthropic-version（实测不发送亦 200）
-		req.Header.Set("Anthropic-Version", anthropicVersion)
-	}
-
-	// 用无总超时的 client：长思考请求不受整请求上限约束（见 Client.StreamHTTP）。
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 stream:false 的聚合路径共用这一层（聚合时由「总时长硬上限」
-	// 变为「空闲上限」，长而持续输出的响应不再被误杀）。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
-}
-
-// TestKey 用最小请求验证凭据可用性（面板「测试」按钮）。
-// 返回 (status, 上游原文片段, error)；200/429 都算连通，401/403 表示凭据或签名问题。
-//
-// 用清单里第一条 anthropic 型模型（响应面最省事、无推理摘要噪声）。
-func (c *Client) TestKey(a *auth.Auth) (int, string, error) {
-	model := upstreamModelName(staticModels[0])
-	body, _ := json.Marshal(map[string]any{
-		"model":      model,
-		"max_tokens": 8,
-		"stream":     true,
-		"system":     []any{map[string]any{"type": "text", "text": signatureSystemPrompt}},
-		"messages":   []any{map[string]any{"role": "user", "content": "ping"}},
-		"thinking":   map[string]any{"type": "disabled"},
-	})
-	sig, err := signatureFor(secretOf(a))
-	if err != nil {
-		return 0, "", err
-	}
-	req, err := http.NewRequest(http.MethodPost, c.base(a)+"/messages", bytes.NewReader(body))
-	if err != nil {
-		return 0, "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Anthropic-Version", anthropicVersion)
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("X-Api-Key", apiKeyOf(a))
-	req.Header.Set(SignatureHeader, sig)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return 0, "", err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-	return resp.StatusCode, string(raw), nil
-}
 
 // FetchModels 上游无目录接口，恒回静态清单。
 func (c *Client) FetchModels(_ *auth.Auth) ([]provider.ModelInfo, error) {
@@ -590,41 +440,9 @@ func (c *Client) Classify(status int, body string) provider.ErrKind {
 	}
 }
 
-// Stream 把上游流（Anthropic SSE 或 Responses SSE）转成 OpenAI SSE 后
-// 交给统一规范化层。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	var usage map[string]any
-	err := upstream.StreamCapture(w, newUpstreamStream(r, model), func(u map[string]any) { usage = u })
-	return usage, err
-}
-
-// Aggregate 把上游流收敛成单个 OpenAI chat.completion 响应。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) {
-	return upstream.Aggregate(newUpstreamStream(r, model))
-}
-
-// newUpstreamStream 按模型选择上游流转换器（入参含渠道前缀，用 bareModelID 归一）。
-func newUpstreamStream(r io.Reader, model string) io.Reader {
-	if usesResponsesAPI(model) {
-		return newResponsesStream(r, model)
-	}
-	return newAnthropicStream(r, model)
-}
-
 // ---------------------------------------------------------------------------
 // 辅助
 // ---------------------------------------------------------------------------
-
-// modelOf 取请求体里的 model。
-func modelOf(body []byte) string {
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(probe.Model)
-}
 
 // apiKeyOf 取账号的 api_key（oma_…）。兼容手填 auth 文件时写在 refreshToken 的情况。
 func apiKeyOf(a *auth.Auth) string {

@@ -21,24 +21,14 @@ import (
 
 	"wild-view/internal/auth"
 	"wild-view/internal/provider"
-	"wild-view/internal/reasoning"
 )
 
 // Client QoderCN 上游客户端。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断。
-	// 2026-09-25 实测同源渠道一次中断恰好 120.00s（= config.upstream.timeout_seconds），
-	// 客户端表现为「突然无响应」。空闲兜底改由 IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout。由 main 装配时注入 config.upstream.stream_idle_seconds。
-	IdleTimeout time.Duration
-	Base        string // 业务 API，默认 https://openapi.qoder.com.cn
-	Gateway     string // 推理网关，默认 https://gateway.qoder.com.cn
+
+	Base    string // 业务 API，默认 https://openapi.qoder.com.cn
+	Gateway string // 推理网关，默认 https://gateway.qoder.com.cn
 
 	// modelMap 客户端名（display_name 规范化）→ 上游 model key；
 	// cache 为最近一次成功拉取的完整模型表（无静态兜底，仅此缓存）。
@@ -56,26 +46,21 @@ func New() *Client {
 	return NewWithTimeout(180 * time.Second)
 }
 
-// DefaultIdleTimeout 流式空闲超时默认值。
-//
-// 实测正常请求 8~40s 完成（同一模型），90s 足够宽松——只拦「真的一个字节都不出」。
-const DefaultIdleTimeout = 90 * time.Second
-
 // NewWithTimeout 指定非流式超时；配置连接池。
 func NewWithTimeout(timeout time.Duration) *Client {
 	return &Client{
-		HTTP:       &http.Client{Timeout: timeout, Transport: newTransport()},
-		StreamHTTP: &http.Client{Transport: newTransport()},
-		Base:       OpenAPIBase,
-		Gateway:    GatewayBase,
-		modelMap:   map[string]string{},
-		userTypes:  map[string]string{},
+		HTTP: &http.Client{Timeout: timeout, Transport: newTransport()},
+
+		Base:      OpenAPIBase,
+		Gateway:   GatewayBase,
+		modelMap:  map[string]string{},
+		userTypes: map[string]string{},
 	}
 }
 
 // newTransport 出厂 Transport：禁 h2 + 连接池 + ResponseHeaderTimeout 兜底。
 //
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到就会无限挂住。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	return &http.Transport{
 		MaxIdleConns:          100,
@@ -84,22 +69,6 @@ func newTransport() *http.Transport {
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{}, // 强制 HTTP/1.1
 		ResponseHeaderTimeout: 60 * time.Second,
 	}
-}
-
-// streamClient 返回流式调用用的客户端（无总超时，回落新建保证 nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 // NewWithBase 测试用：覆盖 base/gateway。
@@ -291,158 +260,6 @@ type thinkingParam struct {
 	Type string `json:"type"`
 }
 
-// reasoningSpecFor 把归一化后的思考控制投影成 QoderCN 的请求字段。
-//
-// 官方客户端同时写 model_config.is_reasoning、parameters.reasoning_effort、
-// parameters.enable_thinking，因此这里返回一个 reasoningSpec 交给 body 层三处一起写，
-// 避免出现矛盾态（is_reasoning=true + enable_thinking=false）。
-//
-// 语义（clientModel 用客户端名，与模型目录的能力表同键；能力来自 RealmQoderCN 面）：
-//   - 未表达 → 关，且不下发档位字段（与旧行为一致，避免打扰上游默认档）；
-//   - 显式关闭 → 该模型声明可关闭（thinking_config.disabled）时真关
-//     （effort=none + enable_thinking=false + is_reasoning=false）；
-//     不可关闭时**降到最低档**而不是发 none——上游对不认识的 none 会静默
-//     忽略并按其默认档执行，反而偏离客户端「别想太多」的意图；
-//     能力未知（目录未拉到）时只关开关，不猜档位；
-//   - 指定档位 → 按该模型 ladder 就近降级（reasoning.Caps.Clamp），
-//     避免把 high 发给只认 low/medium/xhigh 的模型；
-//   - 只说开思考 → 补上游标了 is_default 的档；没有声明则只翻开关。
-//
-// thinking.type 作为兜底：未经 server 层归一化的直连调用仍可能只带该字段。
-func reasoningSpecFor(clientModel, reasoningEffort string, thinking *thinkingParam) reasoningSpec {
-	probe := map[string]any{}
-	if reasoningEffort != "" {
-		probe["reasoning_effort"] = reasoningEffort
-	}
-	if thinking != nil && thinking.Type != "" {
-		probe["thinking"] = map[string]any{"type": thinking.Type}
-	}
-	control, err := reasoning.Resolve(probe, false)
-	if err != nil {
-		return reasoningSpec{} // 非法控制已在 server 层拦下；此处兜底按未表达处理
-	}
-	const realm = reasoning.RealmQoderCN
-	switch control.Mode {
-	case reasoning.ModeDisabled:
-		cap, ok := reasoning.Caps.Lookup(realm, clientModel)
-		if !ok {
-			return reasoningSpec{}
-		}
-		if cap.SupportsDisable {
-			return reasoningSpec{Enabled: false, Effort: "none"}
-		}
-		if lowest := reasoning.LowestEffort(cap.Efforts); lowest != "" {
-			return reasoningSpec{Enabled: true, Effort: lowest}
-		}
-		return reasoningSpec{}
-	case reasoning.ModeEnabled, reasoning.ModeEffort:
-		// 保守策略（让「对外声明」与「实际下发」严格对齐）：能力未知的模型只翻开关、
-		// 不下发档位字段——面板与 /v1/models 对未声明 thinking_config 的模型同样不暴露档位
-		// （reasoning.ListingForKind 返回空），两端口径一致。
-		// ✅ 档位下发已实测：2026-09-22 探针直连真实账号（见 docs/qoderCN渠道接入备忘.md §8 ——
-		// low 2206 字 < medium 2502 字 < xhigh 超时截断，上游确接受 parameters.reasoning_effort）；
-		// 2026-09-24 再经网关端到端复核（qwen3.8-max：low → rtok 429/429、xhigh → 1082/285、
-		// 未表达 → 0）。故「有 thinking_config 声明」的模型档位确被上游采纳；守卫只留给
-		// 「无声明」模型（是否像 internal/qoder 那样对未知模型也原样透传，属风格选择而非缺陷）。
-		cap, ok := reasoning.Caps.Lookup(realm, clientModel)
-		if !ok {
-			return reasoningSpec{Enabled: true}
-		}
-		effort := reasoning.ChatEffort(control)
-		if control.Mode == reasoning.ModeEnabled && control.BudgetTokens == nil {
-			// 只说开思考：用该模型声明的默认档；没有声明就不下发档位字段。
-			effort = cap.DefaultEffort
-			if effort == "" {
-				return reasoningSpec{Enabled: true}
-			}
-		}
-		if effort != "" {
-			effort = reasoning.Caps.Clamp(realm, clientModel, effort)
-		}
-		return reasoningSpec{Enabled: true, Effort: effort}
-	}
-	return reasoningSpec{}
-}
-
-// ChatStream 发 chat 请求并返回原始嵌套 SSE body 流（调用方负责 Close）。
-// 非 2xx 时 rc 为 nil、respBody 为上游响应体、err 为 nil；只有传输层失败才返回 err。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	// body 是 server 侧改写后的 OpenAI 请求；qoder 需要 messages/model/tools/max_tokens。
-	var reqOpenAI struct {
-		Model           string           `json:"model"`
-		Messages        []map[string]any `json:"messages"`
-		Tools           []any            `json:"tools"`
-		ReasoningEffort string           `json:"reasoning_effort"`
-		MaxTokens       int              `json:"max_tokens"`
-		Thinking        *thinkingParam   `json:"thinking"`
-	}
-	if err := json.Unmarshal(body, &reqOpenAI); err != nil {
-		return nil, 0, nil, fmt.Errorf("parse chat body: %w", err)
-	}
-	clientName := reqOpenAI.Model
-	modelKey := c.modelKey(clientName)
-	if modelKey == "" {
-		modelKey = clientName
-	}
-
-	// 思考控制：server 层（internal/server.prepareChatBody）已把 reasoning_effort /
-	// reasoning.effort / thinking.* / enable_thinking 等写法归一化为顶层 reasoning_effort，
-	// 这里按官方投影成 is_reasoning + parameters{reasoning_effort, enable_thinking}。
-	spec := reasoningSpecFor(clientName, reqOpenAI.ReasoningEffort, reqOpenAI.Thinking)
-	log.Printf("qodercn reasoning: client=%q key=%q is_reasoning=%v effort=%q",
-		clientName, modelKey, spec.Enabled, spec.Effort)
-
-	// 上下文档位（上游 issue #27）：客户端 context_length/context_window 提示 → 模型档位表
-	mc := c.modelEntry(modelKey)
-	contextWindow := resolveContextWindow(parseContextWindowHint(body), mc)
-
-	rawBody, err := buildAgentBody(reqOpenAI.Messages, mc, reqOpenAI.Tools, spec, reqOpenAI.MaxTokens, c.userTypeOf(a), contextWindow)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("build qodercn body: %w", err)
-	}
-	encoded := qoderEncode(rawBody)
-	url := c.Gateway + EpChat
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(encoded))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	dt := a.JWT()
-	sess, err := NewCosySession(a.MachineID, a.MachineToken, a.MachineType, a.Nickname, a.UID, dt, a.RefreshToken, c.userTypeOf(a))
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("cosy session: %w", err)
-	}
-	if err := sess.ApplyHeaders(req, encoded, url, a.UID, "text/event-stream", true, modelKey); err != nil {
-		return nil, 0, nil, fmt.Errorf("cosy headers: %w", err)
-	}
-	// 用无总超时的 client：长思考请求不受整请求上限约束（见 Client.StreamHTTP）。
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		log.Printf("qodercn chat_stream uid=%s model=%s: transport error: %v", a.UID, modelKey, err)
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		log.Printf("qodercn chat_stream uid=%s model=%s: upstream %d body=%s",
-			a.UID, modelKey, resp.StatusCode, truncate(string(raw), 200))
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 stream:false 的聚合路径共用这一层（聚合时由「总时长硬上限」
-	// 变为「空闲上限」，长而持续输出的响应不再被误杀）。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
-}
-
-// modelEntry 按 key 找缓存中的模型条目（构造 model_config 全字段用）；找不到返回 nil（auto 兜底）。
-func (c *Client) modelEntry(key string) *ModelEntry {
-	for i := range c.cache {
-		if c.cache[i].Key == key {
-			return &c.cache[i]
-		}
-	}
-	return nil
-}
-
 // UserResource 查询账号当前可花费积分（基础 + 赠送聚合）。
 func (c *Client) UserResource(a *auth.Auth) (int64, error) {
 	dt := a.JWT()
@@ -532,17 +349,6 @@ func (c *Client) DailyCheckinReport(a *auth.Auth) (provider.CheckinReport, error
 
 // Classify 实现 provider.Upstream。
 func (c *Client) Classify(status int, body string) provider.ErrKind { return Classify(status, body) }
-
-// Stream 实现 provider.Upstream（嵌套 SSE → 标准 OpenAI SSE 透传）。
-// model 为客户端请求的模型名，直接注入每个 chunk（上游恒为 "auto"）。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	return StreamCapture(w, r, model, nil)
-}
-
-// Aggregate 实现 provider.Upstream（嵌套 SSE 聚合）。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) {
-	return aggregate(r, model)
-}
 
 // ---------------------------------------------------------------------------
 // 错误分类

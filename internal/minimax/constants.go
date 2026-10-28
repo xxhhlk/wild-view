@@ -65,13 +65,6 @@ const (
 	oauthTimeout   = 20 * time.Second
 )
 
-// DefaultIdleTimeout 流式空闲看门狗阈值（只拦「真的一个字节都不出」，不掐长思考）。
-//
-// ⚠️ 协议文档**没有**给出该值（参考实现里不存在空闲看门狗这一概念），
-// 取与本仓 monkeycode 相同的 90 s，属本工具自有的工程参数，不是上游协议事实。
-// 空闲看门狗只服务于「上游中途卡死」这一形态，与 §5 的截断判定互补（R58）。
-const DefaultIdleTimeout = 90 * time.Second
-
 // 签到领取结果（协议 §7.1，取自参考实现 asar 常量名 SigninClaimResult）。
 //
 // ⚠️ **幂等判据是这里的 claim_result，不是 HTTP 状态码**：重复领取同样回 HTTP 200

@@ -21,11 +21,8 @@ package qodercom
 
 import (
 	"encoding/json"
-	"errors"
-	"net/http/httptest"
-	"strings"
+
 	"testing"
-	"time"
 
 	"wild-view/internal/provider"
 )
@@ -49,84 +46,6 @@ func envelopeFrame(t *testing.T, inner string, statusCode int, headers map[strin
 		"statusCode":      "FORBIDDEN",
 	})
 	return "data:" + env + "\n\n"
-}
-
-// TestQuotaExhaustedFrameIsHardCredit code 112（付费墙）/ 110（当日用量超限）
-// 必须归 ErrHardCredit，且零字节写出。
-func TestQuotaExhaustedFrameIsHardCredit(t *testing.T) {
-	cases := map[string]string{
-		"112 付费墙": mustJSON(t, map[string]any{
-			"code":    "112",
-			"message": mustJSON(t, map[string]any{"pricingUrl": "https://qoder.com/pricing?client=qoder"}),
-		}),
-		"110 当日用量超限":         `{"code":"110","message":"Billing daily count exceeded"}`,
-		"isQuotaExceeded 标记": `{"code":"403","message":"{\"isQuotaExceeded\":true}"}`,
-	}
-	for name, inner := range cases {
-		t.Run(name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			_, err := StreamCapture(rec, strings.NewReader(envelopeFrame(t, inner, 403, nil)), "deepseek-flash", nil)
-
-			var pe *provider.Error
-			if !errors.As(err, &pe) {
-				t.Fatalf("额度耗尽帧应上抛 *provider.Error，实际 err=%v", err)
-			}
-			if pe.Kind != provider.ErrHardCredit {
-				t.Fatalf("Kind = %v, want ErrHardCredit（账号级额度耗尽，不是排队）", pe.Kind)
-			}
-			if !pe.Kind.Rotatable() {
-				t.Fatal("ErrHardCredit 必须可换号")
-			}
-			if rec.Body.Len() != 0 {
-				t.Fatalf("错误帧不得写出任何字节（否则客户端拿到空 delta 干等 180s），实际写了 %d 字节: %s",
-					rec.Body.Len(), rec.Body.String())
-			}
-		})
-	}
-}
-
-// TestQueuedFrameIsQueued 10605/isQueued 走排队语义：只冷「号×模型」，不是额度耗尽。
-func TestQueuedFrameIsQueued(t *testing.T) {
-	inner := mustJSON(t, map[string]any{
-		"code": "10605",
-		"message": mustJSON(t, map[string]any{
-			"isQueued": true, "modelKey": "dfmodel", "queueCount": 8407,
-			"retryAfterSeconds": 30, "waitTime": 509,
-		}),
-	})
-	rec := httptest.NewRecorder()
-	_, err := StreamCapture(rec, strings.NewReader(envelopeFrame(t, inner, 403, map[string][]string{"Retry-After": {"30"}})),
-		"deepseek-flash", nil)
-
-	var q *provider.Queued
-	if !errors.As(err, &q) {
-		t.Fatalf("排队帧应上抛 *provider.Queued，实际 err=%v", err)
-	}
-	if q.Kind() != provider.ErrQueued {
-		t.Fatalf("Kind = %v, want ErrQueued", q.Kind())
-	}
-	if q.QueueCount != 8407 || q.RetryAfter != 30*time.Second || q.WaitSeconds != 509 {
-		t.Fatalf("排队元数据解析错误: %+v", q)
-	}
-	if rec.Body.Len() != 0 {
-		t.Fatalf("排队帧不得写出任何字节，实际 %d 字节", rec.Body.Len())
-	}
-}
-
-// TestNormalChunkStillForwarded 带 choices 的正常 delta 不受影响。
-func TestNormalChunkStillForwarded(t *testing.T) {
-	chunk := mustJSON(t, map[string]any{
-		"id": "c1", "object": "chat.completion.chunk",
-		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": "你好"}}},
-	})
-	rec := httptest.NewRecorder()
-	_, err := StreamCapture(rec, strings.NewReader(envelopeFrame(t, chunk, 200, nil)), "deepseek-flash", nil)
-	if err != nil {
-		t.Fatalf("正常帧不应报错: %v", err)
-	}
-	if !strings.Contains(rec.Body.String(), `"content":"你好"`) {
-		t.Fatalf("正常 delta 应透传，实际: %s", rec.Body.String())
-	}
 }
 
 // TestClassifyQuotaCodes 4xx 直发的同类 body 也要归 ErrHardCredit（不只是 envelope 形态）。

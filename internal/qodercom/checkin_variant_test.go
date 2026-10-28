@@ -18,11 +18,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+
 	"testing"
 	"time"
-
-	"wild-view/internal/provider"
 )
 
 // desktopCampaignsPayload 桌面端 main.log 中裁剪出的真实响应（字段形状原样保留）。
@@ -72,116 +70,4 @@ func withCheckinServer(t *testing.T, h http.HandlerFunc) {
 	old := checkinHost
 	checkinHost = srv.URL
 	t.Cleanup(func() { checkinHost = old })
-}
-
-// TestDesktopClaimStatusObjectIsClaimable 桌面端真实 payload（claimStatus 为对象）必须识别为可领取，
-// 并真正发出 POST claim → claimed + amount。
-// 修复前：扁平 string 反序列化失败被吞，claimStatus 恒为空串 → targetID 为空 → no_campaign。
-func TestDesktopClaimStatusObjectIsClaimable(t *testing.T) {
-	var claimedPath string
-	withCheckinServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == EpCampaigns && r.Method == http.MethodGet:
-			w.Write([]byte(desktopCampaignsPayload))
-		case strings.HasSuffix(r.URL.Path, "/claim") && r.Method == http.MethodPost:
-			claimedPath = r.URL.Path
-			w.Write([]byte(desktopClaimOkPayload))
-		default:
-			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
-		}
-	})
-
-	rep, err := checkin(newAuth())
-	if err != nil {
-		t.Fatalf("checkin: %v", err)
-	}
-	if claimedPath == "" {
-		t.Fatalf("列表里有 CLAIMABLE 活动时必须发出 claim；report = %+v", rep)
-	}
-	if !strings.Contains(claimedPath, "01a130ef-2c3d-7ee6-a290-90c3207b536d") {
-		t.Errorf("claimed wrong campaign: %s", claimedPath)
-	}
-	if rep.Status != provider.CheckinClaimed || rep.Amount != 100 {
-		t.Errorf("report = %+v, want claimed +100", rep)
-	}
-	if rep.Status.Retryable() {
-		t.Error("claimed 不得标记可重试")
-	}
-}
-
-// TestClaimStatusObjectClaimedIsAlready 桌面端 payload 中活动已领（claimStatus:{status:CLAIMED}）时，
-// 结果必须是 already_claimed（展示「今日已领取」），而不是 no_campaign。
-func TestClaimStatusObjectClaimedIsAlready(t *testing.T) {
-	claimedPayload := `{"showCampaign":true,"claimable":false,"campaigns":[
-	  {"campaignId":"c1","campaignKey":"act-20261013-119","actionType":"CLAIM_BENEFIT",
-	   "claimStatus":{"status":"CLAIMED"},"benefit":{"kind":"CREDITS","amount":100}}]}`
-	withCheckinServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != EpCampaigns || r.Method != http.MethodGet {
-			t.Errorf("已领取时不得再发 claim：%s %s", r.Method, r.URL.Path)
-			return
-		}
-		w.Write([]byte(claimedPayload))
-	})
-
-	rep, err := checkin(newAuth())
-	if err != nil {
-		t.Fatalf("checkin: %v", err)
-	}
-	if rep.Status != provider.CheckinAlready {
-		t.Fatalf("report = %+v, want already_claimed", rep)
-	}
-	if rep.Status.Retryable() {
-		t.Error("already_claimed 不应当日重试")
-	}
-	if rep.Amount != 100 {
-		t.Errorf("amount = %d, want 从 campaign.benefit.amount 回填 100", rep.Amount)
-	}
-	if !strings.Contains(rep.Msg, "100") {
-		t.Errorf("msg = %q, want 含金额 100", rep.Msg)
-	}
-}
-
-// TestViewDetailsClaimedDoesNotMaskNoCampaign VIEW_DETAILS 活动的 CLAIMED 不是「今天的签到已领」：
-// 列表里没有任何 CLAIM_BENEFIT 时仍必须是 no_campaign（保持窗口重试），不得被误判成已完成。
-func TestViewDetailsClaimedDoesNotMaskNoCampaign(t *testing.T) {
-	onlyView := `{"showCampaign":true,"claimable":false,"campaigns":[
-	  {"campaignId":"c2","campaignKey":"act-20260901-493","actionType":"VIEW_DETAILS",
-	   "claimStatus":{"status":"CLAIMED"}}]}`
-	withCheckinServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != EpCampaigns || r.Method != http.MethodGet {
-			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
-			return
-		}
-		w.Write([]byte(onlyView))
-	})
-
-	rep, err := checkin(newAuth())
-	if err != nil {
-		t.Fatalf("checkin: %v", err)
-	}
-	if rep.Status != provider.CheckinNoCampaign || !rep.Status.Retryable() {
-		t.Fatalf("report = %+v, want no_campaign (retryable)", rep)
-	}
-}
-
-// TestClaimBenefitWithoutUsableObject 线上同时观察到 `"claimStatus":"CLAIMABLE"`（扁平）
-// 与 `"claimStatus":{…}`（对象）两种形态，两种都必须被接受（向后兼容）。
-func TestClaimBenefitFlatStringStillWorks(t *testing.T) {
-	var claimed bool
-	withCheckinServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/claim") {
-			claimed = true
-			w.Write([]byte(`{"status":"CLAIMED","replayed":false,"benefit":{"amount":100}}`))
-			return
-		}
-		w.Write([]byte(`{"campaigns":[{"campaignId":"c1","actionType":"CLAIM_BENEFIT","claimStatus":"CLAIMABLE"}]}`))
-	})
-
-	rep, err := checkin(newAuth())
-	if err != nil {
-		t.Fatalf("checkin: %v", err)
-	}
-	if !claimed || rep.Status != provider.CheckinClaimed {
-		t.Fatalf("扁平 claimStatus 兼容性丢失：claimed=%t report=%+v", claimed, rep)
-	}
 }

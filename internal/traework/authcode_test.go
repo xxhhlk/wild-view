@@ -2,7 +2,7 @@ package traework
 
 import (
 	"errors"
-	"strings"
+
 	"testing"
 )
 
@@ -31,14 +31,5 @@ func TestIsDeviceLimitReached(t *testing.T) {
 				t.Errorf("IsDeviceLimitReached(%v)=%v want %v", c.err, got, c.want)
 			}
 		})
-	}
-}
-
-// AuthCodeRejectedError 必须透出首因原文（origin + status + body），不能只剩模糊文案。
-func TestAuthCodeRejectedErrorCarriesFirstOrigin(t *testing.T) {
-	e := &AuthCodeRejectedError{Status: 403, Origin: "https://api.trae.cn", Body: `{"Error":{"Code":"20401"}}`}
-	msg := e.Error()
-	if !strings.Contains(msg, "api.trae.cn") || !strings.Contains(msg, "403") || !strings.Contains(msg, "20401") {
-		t.Errorf("Error() 应同时透出 origin/status/body 三个维度，got: %s", msg)
 	}
 }

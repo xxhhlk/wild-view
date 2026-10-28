@@ -102,8 +102,6 @@ const (
 	EpAuthExchange = "/api/auth/exchange"
 	// EpAuthRefresh 静默续期；**不带 Authorization**。
 	EpAuthRefresh = "/api/auth/refresh"
-	// EpChatCompletions 对话（OpenAI 兼容面，恒 stream=true）。
-	EpChatCompletions = "/api/proxy/v1/chat/completions"
 	// EpModelsAvailable 模型列表；query 是 keyfrom 身份载荷。
 	EpModelsAvailable = "/api/models/available"
 	// EpProfileSummary 积分余额与明细。
@@ -165,9 +163,6 @@ const (
 	// LoginFlowTimeout 登录整体超时。**这一条是协议事实**：参考实现为 10 分钟
 	// （协议 §3 流程超时 `10 * 60 * 1000`）。导出给登录编排复用。
 	LoginFlowTimeout = 10 * time.Minute
-	// DefaultIdleTimeout 流式空闲看门狗阈值（只拦「真的一个字节都不出」，不掐长思考）。
-	// 取与本仓 minimax / monkeycode 相同的 90s。
-	DefaultIdleTimeout = 90 * time.Second
 	// ClientVersionTTL 版本号的进程内缓存时长。**协议事实**：12 小时
 	// （协议 §2.5 流程第一步）。
 	ClientVersionTTL = 12 * time.Hour

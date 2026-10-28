@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // Listen 监听地址：Host 为空表示全部接口。
@@ -133,8 +132,8 @@ type Config struct {
 	Region    string `json:"region"`         // 只收 "cn"
 
 	Schedule struct {
-		CheckinHours   []int    `json:"checkin_hours,omitempty"` // 旧格式：[9,21]
-		CheckinTimes   []string `json:"checkin_times,omitempty"` // 新格式：["09:00","21:30"]
+		CheckinHours []int    `json:"checkin_hours,omitempty"` // 旧格式：[9,21]
+		CheckinTimes []string `json:"checkin_times,omitempty"` // 新格式：["09:00","21:30"]
 		// ExpiringThresholdHours 临期展示窗口（小时，本仓独有；上游 R112 已删该开关）。
 		//
 		// ⚠️ 两侧语义不同、互不冲突：上游 R112 让**选号**改按「最早到期时刻升序」，
@@ -347,35 +346,6 @@ func applyEnv(c *Config) {
 	}
 }
 
-func parseContextWindows(v string) map[string]int64 {
-	out := map[string]int64{}
-	for _, part := range strings.Split(v, ",") {
-		key, val, ok := strings.Cut(part, "=")
-		key = strings.TrimSpace(key)
-		if !ok || strings.Index(key, "/") <= 0 {
-			continue
-		}
-		n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
-		if err != nil || n <= 0 {
-			continue
-		}
-		out[key] = n
-	}
-	return out
-}
-
-// parseBoolLoose 宽松布尔解析（环境变量用）：1/true/yes/on 与 0/false/no/off。
-// 无法识别时返回 ok=false，调用方保持原值（不因拼错而静默改语义）。
-func parseBoolLoose(v string) (bool, bool) {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on", "enable", "enabled":
-		return true, true
-	case "0", "false", "no", "off", "disable", "disabled":
-		return false, true
-	}
-	return false, false
-}
-
 func (c *Config) normalize() error {
 	if c.Upstream.TimeoutSeconds <= 0 {
 		c.Upstream.TimeoutSeconds = 120
@@ -423,4 +393,3 @@ func (c *Config) normalize() error {
 	}
 	return nil
 }
-

@@ -94,49 +94,6 @@ func Classify(status int, body string) provider.ErrKind {
 	}
 }
 
-// statusOfPayload 从「HTTP 200 + 内嵌 error_code」的报文里还原一个**用于分类与日志**
-// 的合成状态码。
-//
-// 分类本身按 body 判据（与真状态码路径同一套），这里只是为了日志与 provider.Error.Status
-// 有个可读数字，不参与分类分支。
-func statusOfPayload(body string) int {
-	low := strings.ToLower(body)
-	switch {
-	case reQuotaCode.MatchString(low):
-		return http.StatusPaymentRequired // 402 权益不足
-	case reQueueCode.MatchString(body) || reStandalone429.MatchString(body) || reRateWord.MatchString(low):
-		return http.StatusTooManyRequests
-	case reAuthText.MatchString(low):
-		return http.StatusUnauthorized
-	case reNoBenefitPackage.MatchString(low) || reModelRejected.MatchString(low):
-		return http.StatusBadRequest
-	default:
-		return http.StatusBadGateway
-	}
-}
-
-// StreamError 是「HTTP 200 + 流内 error_code」的业务错误，实现 provider.StreamErrorClassifier
-// （handler 用 errors.As 取值后据此冷却账号——HTTP 200 与响应头早已发出，无法在同一请求内换号）。
-type StreamError struct {
-	Status int
-	Body   string
-	// hint 是额度类错误的额外说明（含 UTC+8 重置时刻），创建时算好，保证 Error() 稳定。
-	hint string
-}
-
-func (e *StreamError) Error() string {
-	msg := "upstream stream error (http " + itoa(e.Status) + "): " + snippet([]byte(e.Body))
-	if e.hint != "" {
-		msg += "；" + e.hint
-	}
-	return msg
-}
-
-// Kind 复用与 HTTP 路径同一套分类。
-func (e *StreamError) Kind() provider.ErrKind { return Classify(e.Status, e.Body) }
-
-var _ provider.StreamErrorClassifier = (*StreamError)(nil)
-
 // itoa 小整数转十进制（避免为一处格式化引入 strconv 的依赖噪音）。
 func itoa(n int) string {
 	if n == 0 {

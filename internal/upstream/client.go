@@ -207,16 +207,6 @@ type Client struct {
 	// BillingHTTP 供账单/签到接口使用（短超时，慢网络下避免面板操作长时间假死）。
 	// 为 nil 时回退到 HTTP。
 	BillingHTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断。
-	// 客户端表现为「突然无响应」（补帧后改为收到 error 帧 + [DONE]）。空闲兜底改由
-	// IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout。由 main 装配时注入 config.upstream.stream_idle_seconds。
-	IdleTimeout time.Duration
 
 	ChatBaseCN      string
 	BillingBaseCN   string
@@ -224,18 +214,13 @@ type Client struct {
 	BillingBaseGlob string
 }
 
-// DefaultIdleTimeout 流式空闲超时默认值。
-//
-// 实测正常请求 8~40s 完成（同一模型），90s 足够宽松——只拦「真的一个字节都不出」。
-const DefaultIdleTimeout = 90 * time.Second
-
 // New 生产默认值。Transport 加固：禁 h2 + Dial 超时/keepalive + TLS 握手超时 + ResponseHeaderTimeout。
 func New() *Client {
 	tr := newTransport()
 	return &Client{
-		HTTP:            &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		BillingHTTP:     &http.Client{Timeout: 30 * time.Second, Transport: tr},
-		StreamHTTP:      &http.Client{Transport: newTransport()},
+		HTTP:        &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		BillingHTTP: &http.Client{Timeout: 30 * time.Second, Transport: tr},
+
 		ChatBaseCN:      "https://copilot.tencent.com",
 		BillingBaseCN:   "https://www.codebuddy.cn",
 		ChatBaseGlobal:  "https://www.workbuddy.ai",
@@ -262,22 +247,6 @@ func (c *Client) billingClient() *http.Client {
 		return c.BillingHTTP
 	}
 	return c.HTTP
-}
-
-// streamClient 返回流式调用用的客户端（无总超时，回落新建保证 nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 func (c *Client) chatBase(a *auth.Auth) string {
@@ -385,40 +354,6 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 	}
 	log.Printf("workbuddy refresh success uid=%s refresh_rotated=%t expires_at=%d", a.UID, a.RefreshToken != oldRefresh, a.ExpiresAt)
 	return nil
-}
-
-// ChatStream 发 chat 请求并返回原始 SSE body 流（调用方负责 Close）。
-// 非 2xx 时 rc 为 nil、body 为上游响应体（供调用方 Classify(status, string(body))）、err 为 nil；
-// 只有传输层失败才返回 err。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	url := c.chatBase(a) + "/v2/chat/completions"
-	prepared := PrepareBody(body)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(prepared))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	// 会话头族（R116）：X-Conversation-ID / 轮次锚由入站 body 派生，缺了会被上游
-	// 按账号灰度判 11128（见 Classify 的 "conversation id missing" 分支）。
-	conv, turn := conversationAnchors(body)
-	ChatHeaders(req, a, conv, turn)
-	// 用无总超时的 client：长思考请求不受整请求上限约束（见 Client.StreamHTTP）。
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		log.Printf("chat_stream uid=%s: transport error: %v", a.UID, err)
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		kind := Classify(resp.StatusCode, string(raw))
-		log.Printf("chat_stream uid=%s: upstream %d %s body=%s req=%s",
-			a.UID, resp.StatusCode, kind, provider.LogBody(string(raw)), provider.LogParams(prepared))
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 stream:false 的聚合路径共用这一层（聚合时由「总时长硬上限」
-	// 变为「空闲上限」，长而持续输出的响应不再被误杀）。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
 }
 
 // ModelInfo 动态模型信息（含 maxInputTokens/maxOutputTokens）。
@@ -763,17 +698,6 @@ func (c *Client) DailyCheckinGrant(a *auth.Auth) (granted int64, err error) {
 
 // Classify 实现 provider.Upstream。
 func (c *Client) Classify(status int, body string) provider.ErrKind { return Classify(status, body) }
-
-// Stream 实现 provider.Upstream（WorkBuddy 上游已是 OpenAI SSE，直接透传）。
-// 返回值为末帧捕获的 usage（供记账，上游未返回时为 nil）。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	var usage map[string]any
-	err := StreamCapture(w, r, func(u map[string]any) { usage = u })
-	return usage, err
-}
-
-// Aggregate 实现 provider.Upstream（WorkBuddy OpenAI SSE 聚合）。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) { return Aggregate(r) }
 
 // FetchModelPricing 从 /console/enterprises/personal/models 拉取模型积分倍率。
 // 返回全量模型定价（含 credits 字段），不受 cli agent 过滤限制。

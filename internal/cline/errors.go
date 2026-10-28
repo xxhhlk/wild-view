@@ -70,7 +70,7 @@ var badParamMarkers = []string{
 	"integer below minimum",
 }
 
-// IsCapBody 报告响应体是否命中「共享出口上限」文案（供 ChatStream/Stream 记录模型级冷却）。
+// IsCapBody 报告响应体是否命中「共享出口上限」文案（用于额度/错误归类）。
 func IsCapBody(body string) bool {
 	lower := strings.ToLower(body)
 	for _, m := range capMarkers {

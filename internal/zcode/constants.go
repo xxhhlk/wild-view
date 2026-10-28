@@ -36,8 +36,7 @@ package zcode
 
 import (
 	"net/http"
-	"os"
-	"strconv"
+
 	"strings"
 	"time"
 
@@ -138,14 +137,6 @@ func requiredHeaderNames() []string {
 const (
 	// requestTimeout 业务端点（额度 / 目录）的总超时。
 	requestTimeout = 30 * time.Second
-
-	// DefaultIdleTimeout 流式空闲看门狗阈值：逐字对齐官方
-	// `modelStream.idleTimeoutMs = 6e5`（协议 §1.5 的「空闲超时」行）。
-	//
-	// 语义：连续该时长**读不到任何字节**才判上游卡死。参考实现另有「每帧 +30s 增量」与
-	// 「整轮 15 分钟墙钟」，后者只兜「真静默 / captcha 卡死」——本仓的等价物就是
-	// provider.NewIdleReader（per-frame 空闲），不做整轮墙钟（R35：流式请求不设总超时）。
-	DefaultIdleTimeout = 600 * time.Second
 )
 
 // idleTimeoutEnv 空闲超时的环境变量覆盖名（与参考实现同名，便于排障时对齐口径）。
@@ -234,14 +225,4 @@ func fallbackDeviceMid(uid, token string) string {
 	}
 	return string(hexs[0:8]) + "-" + string(hexs[8:12]) + "-" + string(hexs[12:16]) + "-" +
 		string(hexs[16:20]) + "-" + string(hexs[20:32])
-}
-
-// idleTimeout 生效的空闲超时：环境变量（毫秒）覆盖 → 默认值。
-func idleTimeout() time.Duration {
-	if raw := strings.TrimSpace(os.Getenv(idleTimeoutEnv)); raw != "" {
-		if ms, err := strconv.ParseInt(raw, 10, 64); err == nil && ms > 0 {
-			return time.Duration(ms) * time.Millisecond
-		}
-	}
-	return DefaultIdleTimeout
 }

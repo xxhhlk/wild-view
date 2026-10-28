@@ -3,11 +3,7 @@
 package provider
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -234,122 +230,6 @@ func (k ErrKind) String() string {
 	}
 }
 
-// Rotatable 报告该错误是否应换下一个账号重试本请求（账号级错误）。
-// 账号有问题的（限流/欠费/登录态死/偶发 404/账号故障/排队）：换号有价值；
-// 请求内容有问题的（内容拦截/上下文超限/模型不存在）：换号必然复现，透传原文结束；
-// ErrClient（其他 4xx 业务错误）可换号——实测 workbuddyai 11158「model is not allowed for
-// user type [personal_free_user]」就是账号等级差异，换到 pro 号即放行。
-//
-// ⚠️ ErrServer（5xx）**不在**此列（2026-10-20 除名）：实测 workbuddyai 11134
-// 「the model provider is temporarily unavailable」在同一波里 4 个号全 500，且每个号
-// 内部客户端已自行重试 3 次 ⇒ 换号必撞同一面墙，只是把 1 次失败放大成 9 次。
-func (k ErrKind) Rotatable() bool {
-	switch k {
-	case ErrSoftRate, ErrHardCredit, ErrSessionDead, ErrNotFound, ErrAccountFault, ErrClient, ErrQueued:
-		return true
-	default:
-		return false
-	}
-}
-
-// modelScopedSoftRateMarkers 表明「软限流只作用于当前模型」的上游文案特征串。
-// WorkBuddy 系上游的 6004 频率限流原文：
-//
-//	usage exceeds frequency limit, but don't worry, your usage will reset at
-//	<time>, alternatively, you can switch to the other models to continue using it.
-//
-// 上游自己声明「换其他模型可以继续用」→ 该限流按模型独立计算，冷却也应按模型粒度。
-// 否则一个模型撞到每日上限会把账号上其他仍可用的模型一起连坐（实测：A 账号的
-// deepseek-v4.1-flash 于 02:57 起被限流，而其 gpt-5.6-luna 于 21:07 仍能成功）。
-//
-// 2026-10-12 补 14003（workbuddyai 瞬时拥塞限流）的原文明文：
-//
-//	"displayTips":{"en":"Wait about a minute before retry, or switch to a LESS BUSY MODEL."}
-//
-// 同一个"这个模型正忙、换一个试试"的语义，只是措辞不同。生产实测（state v4）：
-// 14003 落在账号级冷却、6004 落在模型级冷却，而 14003 会在两个账号 18~48s 内相继
-// 触发——账号级既救不了当前模型，还把该账号其它可用模型一起拖死。
-//
-// 2026-10-17 再补 14003 的**第三种措辞**（workbuddyai uid=e840f08f… 实录）：
-//
-//	"displayMsg":{"en":"Model busy. Please switch models or retry later", …},
-//	"displayTips":{"en":"This model is currently saturated. … Please switch to another model …"}
-//
-// 前两条 marker 都命中不了它（"switch to the other models" 要求 the other 连写），
-// 于是同一类饱和限流在不同上游文案下被判成账号级——这正是「靠文案判据」的固有脆性，
-// 但 6004/14003 没有结构化「scope」字段可用，只能把已取证的措辞全部收进来。
-var modelScopedSoftRateMarkers = []string{
-	"switch to the other models",
-	"less busy model",
-	"switch models",
-	"switch to another model",
-	"model busy",
-	"换模型",
-	// 中文原文（WorkBuddy 系 6004 实际下发形态，2026-10-21 补）：
-	// 「您的使用量已超出频率限制，将在 … UTC+8 重置，您也可以切换其他模型继续使用。」
-	"切换其他模型",
-}
-
-// IsModelScopedSoftRate 判定软限流（ErrSoftRate）是否只作用于当前模型。
-// 命中特征串 → 模型级冷却（pool.CooldownModel）；否则 → 账号级（pool.Cooldown）。
-//
-// 默认取账号级是刻意的保守选择：账号级最坏是多冷却一个本来还能用的账号——有号可轮换，
-// 代价只是提前换号；而把账号级限流误判成模型级，会让同一账号的 N 个模型各撞一次限流，
-// 且要等客户端逐个重试才暴露，总损失更大。
-func IsModelScopedSoftRate(body string) bool {
-	lower := strings.ToLower(body)
-	for _, m := range modelScopedSoftRateMarkers {
-		if strings.Contains(lower, strings.ToLower(m)) {
-			return true
-		}
-	}
-	return false
-}
-
-// Queued 上游「模型排队中」提示：HTTP 200 里的一帧业务错误，不是拒绝。
-//
-// 首例 qodercn deepseek-flash（2026-10-20 生产实录）——外层 headers 带 Retry-After，
-// body 内三层嵌套：{code:403} → {code:10605} → {isQueued:true, modelKey:"dfmodel",
-// queueCount:8407, retryAfterSeconds:30, waitTime:509}。
-//
-// 账号本身健康（同号其他模型照用），拥塞发生在网关的**模型维度**上；换号可能命中不同队列。
-// 该帧必须在**写出任何字节之前**识别：把这种没有 choices 的帧当普通 chunk 透传，
-// 客户端只会显示「正在等待模型…」，直到网关 180s 后掐断连接（实测三次 180.3/180.7/180.8s）。
-type Queued struct {
-	ModelKey    string
-	QueueCount  int
-	RetryAfter  time.Duration // 上游建议的重试间隔（外层 Retry-After 或 retryAfterSeconds）
-	WaitSeconds int           // 上游估计的排队时长（waitTime）
-}
-
-func (e *Queued) Error() string {
-	msg := "model queued upstream"
-	if e.ModelKey != "" {
-		msg += " (" + e.ModelKey + ")"
-	}
-	if e.QueueCount > 0 {
-		msg += fmt.Sprintf(" queue=%d", e.QueueCount)
-	}
-	if e.WaitSeconds > 0 {
-		msg += fmt.Sprintf(" wait=%ds", e.WaitSeconds)
-	}
-	if e.RetryAfter > 0 {
-		msg += fmt.Sprintf(" retry_after=%s", e.RetryAfter)
-	}
-	return msg
-}
-
-// Kind 实现 StreamErrorClassifier：流在写出字节之前命中排队时，handler 据此走换号路径。
-func (e *Queued) Kind() ErrKind { return ErrQueued }
-
-// Cooldown 本次「账号×模型」应冷却多久：优先用上游 retryAfter，缺失时退 30s。
-func (e *Queued) Cooldown() time.Duration {
-	if e.RetryAfter > 0 {
-		return e.RetryAfter
-	}
-	return 30 * time.Second
-}
-
 // Error 带分类的上游错误。
 type Error struct {
 	Kind   ErrKind
@@ -372,65 +252,6 @@ func LogBody(s string) string {
 	return s[:keep] +
 		fmt.Sprintf("\n...[log body truncated: %d bytes omitted]...\n", len(s)-2*keep) +
 		s[len(s)-keep:]
-}
-
-// LogParams 生成出站请求体的参数摘要（剔除对话内容与工具定义，其余原样保留），
-// 供上游 4xx 时比对「上游报的参数名」与「我们实际下发的值」。无法解析时按原文
-// 交给 LogBody 截断。
-func LogParams(body []byte) string {
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return LogBody(string(body))
-	}
-	for _, k := range []string{"messages", "input", "tools", "functions"} {
-		delete(obj, k)
-	}
-	for k, v := range obj {
-		switch t := v.(type) {
-		case []any:
-			obj[k] = fmt.Sprintf("len=%d", len(t))
-		case map[string]any:
-			if b, err := json.Marshal(t); err == nil {
-				obj[k] = json.RawMessage(LogBody(string(b)))
-			}
-		case string:
-			if len(t) > 200 {
-				obj[k] = t[:200] + "..."
-			}
-		}
-	}
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return LogBody(string(body))
-	}
-	return string(out)
-}
-
-// Classified 把 *Error 包装成实现了 StreamErrorClassifier 的错误，供**流式路径**使用。
-//
-// 为什么需要包装而不是直接给 Error 加 Kind() 方法：字段名就叫 Kind，与方法同名会冲突。
-// 为什么流式路径需要它：渠道在流首帧发现「上游 200 里包着业务错误」时（如 qodercom 的
-// envelope 403 → code 110/112 额度耗尽），一字节未写就上抛错误——此刻还来得及换号，
-// 但 handler 必须能问出错误类别（ErrHardCredit ⇒ 整号硬冷却 + 换号）。
-// 不包装则只能走「已写流」分支（只罚不换），5 个号全耗尽时客户端只能干等下次请求。
-type Classified struct{ Err *Error }
-
-// Kind 实现 StreamErrorClassifier。
-func (c *Classified) Kind() ErrKind { return c.Err.Kind }
-
-func (c *Classified) Error() string { return c.Err.Error() }
-
-// Unwrap 让 errors.As(err, &pe) 仍能取回原始 *provider.Error（保留 Status/Msg）。
-func (c *Classified) Unwrap() error { return c.Err }
-
-// AsClassified 把任何带 Kind 字段的 provider.Error 转成 StreamErrorClassifier 可识别的错误；
-// 不是 *provider.Error 时原样返回（如 *Queued 自己就实现了 Kind()）。
-func AsClassified(err error) error {
-	var pe *Error
-	if errors.As(err, &pe) {
-		return &Classified{Err: pe}
-	}
-	return err
 }
 
 // ModelInfo 动态/静态模型信息。
@@ -545,7 +366,7 @@ func (p ModelPricing) IsExplicit() bool {
 	return p.Explicit == nil || *p.Explicit
 }
 
-// QueryClient is the read-only account and catalog capability used by the viewer.
+// QueryClient 是查看器使用的只读账号与模型目录能力。
 type QueryClient interface {
 	RefreshToken(a *auth.Auth) error
 	FetchModels(a *auth.Auth) ([]ModelInfo, error)
@@ -553,53 +374,25 @@ type QueryClient interface {
 	UserResourceDetail(a *auth.Auth) (int64, []ResourceItem, error)
 }
 
-// CheckinClient is deliberately separate from query capabilities.
+// CheckinClient 定义独立于查询的签到能力。
 type CheckinClient interface {
 	DailyCheckin(a *auth.Auth) error
 }
 
-// SupportsPureCheckin lists channels whose check-in never creates a chat.
+// SupportsPureCheckin 列出签到过程中不会发起对话的渠道。
 func SupportsPureCheckin(k Kind) bool {
 	switch k {
-	case WorkBuddy, WorkBuddyAI, TraeWork, QoderCN, QoderCOM, Raccoon, Loomy, MonkeyCode, GLM, OfficeAce, Minimax, LobsterAI, CodeArts:
+	case WorkBuddy, TraeWork, QoderCN, QoderCOM, Raccoon, Loomy, MonkeyCode, OfficeAce, Minimax, LobsterAI, CodeArts:
 		return true
 	default:
 		return false
 	}
 }
 
-// Upstream 是 server/scheduler 依赖的最小上游能力集合。
+// Upstream 是查看器与签到调度器依赖的能力集合。
 type Upstream interface {
-	RefreshToken(a *auth.Auth) error
-	ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error)
-	FetchModels(a *auth.Auth) ([]ModelInfo, error)
-	FetchModelPricing(a *auth.Auth) ([]ModelPricing, error)
-	UserResource(a *auth.Auth) (int64, error)
-	// UserResourceDetail 返回可消耗余额 + 明细条目（含到期时间与可用性标记）。
-	// 返回的 remain 口径与 UserResource 一致，均为「本工具可消耗」的余额，
-	// 不得包含不可用池——否则 pool 会按虚高余额选号。
-	UserResourceDetail(a *auth.Auth) (int64, []ResourceItem, error)
-	DailyCheckin(a *auth.Auth) error
-	Classify(status int, body string) ErrKind
-
-	// Stream/Aggregate 的 model 参数是「客户端请求的原始模型名」（含 channel/ 前缀），
-	// 由调用方显式传入而非渠道内部记忆状态——后者在多账号并发下会串号。
-	// 实现方应在输出的 model 字段回填该值（上游常返回 "auto" 或裸名）。
-	// Stream 返回值为末帧捕获的 usage（OpenAI 形状，pt/ct/total），供 handler 记 token 流水；
-	// 上游未返回 usage 时为 nil（调用方记 0 token + 请求数）。
-	Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error)
-	Aggregate(r io.Reader, model string) (map[string]any, error)
-}
-
-// StreamErrorClassifier 由「流内业务错误可分类」的渠道实现（当前 traework 的
-// SOLOStreamError）。handler 用 errors.As 取值，据此决定账号惩罚——
-// 使 server 层不必 import 具体渠道包。
-//
-// 为什么需要它：流式请求的 HTTP 200 与响应头在读到上游错误帧**之前**就已发出，
-// 协议上无法在同一请求内换号重试。唯一可行的补救是「把中招账号冷却掉」，
-// 让客户端**下一次**重试时由挑号逻辑换到别的账号（3004 是账号级限流，换号有效）。
-type StreamErrorClassifier interface {
-	Kind() ErrKind
+	QueryClient
+	CheckinClient
 }
 
 // CheckinReporter 由「签到结果可结构化上报」的渠道实现（当前 QoderCN / QoderCOM）。

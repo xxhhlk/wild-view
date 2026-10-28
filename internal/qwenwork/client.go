@@ -24,23 +24,10 @@ import (
 // Client 千问办公上游 HTTP 客户端。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断。
-	// 客户端表现为「突然无响应」。空闲兜底改由 IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout。由 main 装配时注入 config.upstream.stream_idle_seconds。
-	IdleTimeout time.Duration
-	Gateway     string // 推理网关（COSY），默认 https://gateway.qwenwork.cn
-	Web         string // 网页域（Bearer），默认 https://qwenwork.cn
-}
 
-// DefaultIdleTimeout 流式空闲超时默认值。
-//
-// 实测正常请求 8~40s 完成（同一模型），90s 足够宽松——只拦「真的一个字节都不出」。
-const DefaultIdleTimeout = 90 * time.Second
+	Gateway string // 推理网关（COSY），默认 https://gateway.qwenwork.cn
+	Web     string // 网页域（Bearer），默认 https://qwenwork.cn
+}
 
 // New 生产默认。网关对 HTTP/2 不友好（对齐 qoder 渠道经验），强制 HTTP/1.1。
 func New() *Client { return NewWithTimeout(180 * time.Second) }
@@ -48,16 +35,16 @@ func New() *Client { return NewWithTimeout(180 * time.Second) }
 // NewWithTimeout 指定非流式超时；配置连接池。
 func NewWithTimeout(timeout time.Duration) *Client {
 	return &Client{
-		HTTP:       &http.Client{Timeout: timeout, Transport: newTransport()},
-		StreamHTTP: &http.Client{Transport: newTransport()},
-		Gateway:    GatewayBase,
-		Web:        WebBase,
+		HTTP: &http.Client{Timeout: timeout, Transport: newTransport()},
+
+		Gateway: GatewayBase,
+		Web:     WebBase,
 	}
 }
 
 // newTransport 出厂 Transport：禁 h2 + 连接池 + ResponseHeaderTimeout 兜底。
 //
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到就会无限挂住。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	return &http.Transport{
 		MaxIdleConns:          100,
@@ -67,22 +54,6 @@ func newTransport() *http.Transport {
 		ResponseHeaderTimeout: 60 * time.Second,
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{}, // 强制 HTTP/1.1
 	}
-}
-
-// streamClient 返回流式调用用的客户端（无总超时，回落新建保证 nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 func (c *Client) gateway() string {
@@ -235,125 +206,6 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 	return nil
 }
 
-// ChatStream 发推理请求并返回原始嵌套 SSE body 流（调用方负责 Close）。
-// body 是 server 侧改写后的 OpenAI 请求；本渠道透传（补 request_id/session_id + model key 映射）。
-// 非 2xx 时 rc=nil、respBody=上游响应体、err=nil；仅传输层失败才返回 err。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	prepared, err := c.prepareChatBody(body)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	uid, name, email, token := identity(a)
-	if token == "" {
-		return nil, 0, nil, fmt.Errorf("no access token")
-	}
-	sess, err := NewCosySession(uid, name, email, token)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("cosy session: %w", err)
-	}
-	rawURL := c.gateway() + EpChat
-	req, err := http.NewRequest(http.MethodPost, rawURL, bytes.NewReader(prepared))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	headers := map[string]string{}
-	if err := sess.ApplyHeadersWithUID(headers, string(prepared), rawURL, uid); err != nil {
-		return nil, 0, nil, fmt.Errorf("cosy headers: %w", err)
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	req.Header.Set("x-model-key", modelKeyOf(prepared))
-
-	// 用无总超时的 client：长思考请求不受整请求上限约束（见 Client.StreamHTTP）。
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		log.Printf("qwenwork chat_stream uid=%s: transport error: %v", a.UID, err)
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		log.Printf("qwenwork chat_stream uid=%s: upstream %d body=%s req=%s",
-			a.UID, resp.StatusCode, provider.LogBody(string(raw)), provider.LogParams(prepared))
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 stream:false 的聚合路径共用这一层（聚合时由「总时长硬上限」
-	// 变为「空闲上限」，长而持续输出的响应不再被误杀）。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
-}
-
-// prepareChatBody 解析客户端 OpenAI body，补 request_id/session_id、business、
-// 映射 model key。
-// 服务端无状态：messages 由调用方携带全量历史（本渠道不做改写，developer 角色实测可接受）。
-// 注意：server 层正常会把 model 去前缀后传入，但防御性兼容「qwenwork/flash」带前缀形式。
-// 另：x-model-key 决定实际路由（优先级高于 body model），缺省或非法档位 → 上游包 403
-// "Model is not available for this user"（envelope 内嵌，HTTP 仍 200）。
-//
-// business 段（2026-09-24 上游 1.0.4 起强校验）：网关按 body.business.{product,type}
-// 解析模型目录，缺失时对话恒返回 HTTP 200 + envelope 503 "Model catalog unavailable"
-// （模型列表/余额/费率均不受影响，只有推理路径受影响）。仅补 Cosy-Business-* 头
-// 不能替代该字段（已实测四组对照：body 缺 business 的头/原生两种 body 均 503，
-// 补上后均 200；原生 body 结构、Encode=1 组包、机器指纹均非必要条件）。
-func (c *Client) prepareChatBody(body []byte) ([]byte, error) {
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return nil, fmt.Errorf("parse chat body: %w", err)
-	}
-	// model → 上游档位 key：先剥渠道前缀（防御），再查映射表
-	m, _ := obj["model"].(string)
-	if i := strings.LastIndex(m, "/"); i >= 0 {
-		m = m[i+1:]
-	}
-	obj["model"] = ModelKey(m)
-	// 必填字段：request_id / session_id（缺失 → envelope 400）
-	if s, _ := obj["request_id"].(string); strings.TrimSpace(s) == "" {
-		obj["request_id"] = uuid4()
-	}
-	if s, _ := obj["session_id"].(string); strings.TrimSpace(s) == "" {
-		obj["session_id"] = uuid4()
-	}
-	// business.product 是「模型目录」的选路键：缺省 → 503 Model catalog unavailable。
-	// 这是与 Qoder 渠道最关键的一处形状差异（Qoder 无此字段），见 constants.go。
-	// 客户端若自带 business 则只补缺失键，不覆盖其取值。
-	biz, _ := obj["business"].(map[string]any)
-	if biz == nil {
-		biz = map[string]any{}
-		obj["business"] = biz
-	}
-	if s, _ := biz["product"].(string); strings.TrimSpace(s) == "" {
-		biz["product"] = BusinessProduct
-	}
-	if s, _ := biz["type"].(string); strings.TrimSpace(s) == "" {
-		biz["type"] = BusinessType
-	}
-	if s, _ := biz["version"].(string); strings.TrimSpace(s) == "" {
-		biz["version"] = "1"
-	}
-	if _, ok := biz["feature_switches"]; !ok {
-		biz["feature_switches"] = map[string]any{}
-	}
-	// stream 强制 true：上游为 SSE-only 端点（非流式由 Stream/Aggregate 聚合实现）
-	obj["stream"] = true
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// modelKeyOf 从已编码 body 提取映射后的 model key（供 x-model-key 头）。
-func modelKeyOf(prepared []byte) string {
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if json.Unmarshal(prepared, &probe) == nil && probe.Model != "" {
-		return probe.Model
-	}
-	return "pro"
-}
-
 // modelEntry 动态模型接口单条（scene=qwork）。
 type modelEntry struct {
 	Key            string  `json:"key"`
@@ -442,12 +294,12 @@ func displayName(m modelEntry) string {
 
 // chatMode 网页 /api/chat-modes 单条（qwork scene）。
 type chatMode struct {
-	Key            string `json:"key"`
+	Key            string          `json:"key"`
 	Factor         json.RawMessage `json:"price_factor"`
 	CostFactor     json.RawMessage `json:"cost_factor"`
-	Enable         bool    `json:"enable"`
-	IsNew          bool    `json:"is_new"`
-	MaxInputTokens int64   `json:"max_input_tokens"`
+	Enable         bool            `json:"enable"`
+	IsNew          bool            `json:"is_new"`
+	MaxInputTokens int64           `json:"max_input_tokens"`
 }
 
 // FetchModelPricing 费率：优先网页 /api/chat-modes（Bearer，price_factor），
@@ -685,16 +537,6 @@ func (c *Client) DailyCheckin(a *auth.Auth) error {
 
 // Classify 实现 provider.Upstream。
 func (c *Client) Classify(status int, body string) provider.ErrKind { return Classify(status, body) }
-
-// Stream 实现 provider.Upstream（嵌套 SSE → 标准 OpenAI SSE 透传）。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	return StreamCapture(w, r, model, nil)
-}
-
-// Aggregate 实现 provider.Upstream（嵌套 SSE 聚合）。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) {
-	return aggregate(r, model)
-}
 
 // ---------------------------------------------------------------------------
 // 错误分类

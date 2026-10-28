@@ -7,7 +7,7 @@
 - **是什么**：账号额度与模型倍率查看器。单进程 = 管理 HTTP 服务 + 纯签到调度 + 托盘 + 静态 Web UI。
   不提供会话转发，`/v1/*` 与 `/status` 返回 404。
 - **技术栈**：Go 1.25+ / energye/systray / 纯静态前端（go:embed，无构建链）。
-- **模块名**：`wild-work`（历史遗留，尚未改名）。
+- **模块名**：`wild-view`（与 `go.mod` 一致）。
 - **平台**：Windows（完整）、macOS（cgo）、Linux（`--no-tray` 无头）。
 - **数据文件**（默认在 `wild-view-data/`）：
   `config.json`、`auths/<kind>-*.json`（凭据，勿外泄）、`data/state-<kind>.json`、
@@ -70,7 +70,10 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags devdump \
   -ldflags "-H windowsgui" -o dist/wild-view.exe ./cmd/wild-view
 ```
 
-`internal/raccoon` 的两个日额度测试依赖固定日期，属存量失败。
+日额度测试夹具以当前时间生成到期日期，不应随日历推进失败。所有验证失败都需要排查。
+
+`.github/workflows/verify.yml` 在 push、PR 与手动触发时使用 Go 1.25 和 Node.js 24 执行上述四项检查。
+手动发布工作流先复用该验证，再对通过验证的同一提交进行多平台构建和发布；发布触发方式仍为手动。
 
 ## 5. 渠道接入要点
 

@@ -196,11 +196,6 @@ const (
 	quotaTimeout = 30 * time.Second
 	// oauthTimeout OAuth 端点请求超时（OAUTH_TIMEOUT_MS = 20_000）。
 	oauthTimeout = 20 * time.Second
-	// DefaultIdleTimeout 流式空闲看门狗阈值（GEMINI_IDLE_TIMEOUT_MS = 120_000）。
-	//
-	// ⚠️ 必须存在：上游生成大 functionCall 参数期间可能长时间不 flush 任何字节，
-	// 裸 `reader.Read()` 会无限期挂起（协议 §2.5）。
-	DefaultIdleTimeout = 120 * time.Second
 	// QuotaCacheTTL 配额查询的缓存 TTL（QUOTA_CACHE_TTL_MS = 60_000）。
 	QuotaCacheTTL = 60 * time.Second
 )

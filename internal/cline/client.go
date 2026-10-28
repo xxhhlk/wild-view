@@ -1,13 +1,12 @@
 package cline
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+
 	"net/http"
 	"regexp"
 	"strings"
@@ -15,48 +14,37 @@ import (
 	"time"
 
 	"wild-view/internal/auth"
-	"wild-view/internal/backuplink"
 	"wild-view/internal/provider"
 )
 
 // Client 实现 provider.Upstream。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流：**不设 Client.Timeout**（R35）。
-	// Go 的 Client.Timeout 覆盖整个请求生命周期（含读 body），对 SSE 意味着
-	// 「长回答必被从中间掐断」。空闲兜底改由 IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲上限，0 = DefaultIdleTimeout。
-	// ⚠️ 目前**没有配置项**：config.Upstream 只有 timeout_seconds，main 也不注入，
-	// 实际生效值恒为 DefaultIdleTimeout（旧注释承诺的 stream_idle_seconds 从未实现）。
-	IdleTimeout time.Duration
+
 	// Base 网关基址（默认 APIBase）；测试注入 httptest 假上游用，生产不设。
 	Base string
 
 	knownMu sync.RWMutex
-	// knownIDs 是已知模型集（ID → 展示名，来自 free[]），也是 ChatStream 的本地校验集。
+	// knownIDs 是已知模型集（ID → 展示名，来自 free[]），也是本地模型校验集。
 	// 冷启动（未拉到目录）时校验放行 —— 见 models.go 的 knownModel 注释。
 	knownIDs map[string]string
 	capMu    sync.RWMutex
 	capped   map[string]time.Time
-	// routes 是「地区限制→改走备用上游通道」的学习路由（实现在 backuplink.Routes，
-	// 与 oczen 共用同一份编排：见 internal/backuplink/route.go）。
-	routes backuplink.Routes
 }
 
 // New 构造客户端（非流式 120s 总超时；一问一答需要兜底，故保留 Timeout）。
 func New() *Client {
 	tr := newTransport()
 	return &Client{
-		HTTP:       &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		StreamHTTP: &http.Client{Transport: tr},
-		knownIDs:   map[string]string{},
-		capped:     map[string]time.Time{},
+		HTTP: &http.Client{Timeout: 120 * time.Second, Transport: tr},
+
+		knownIDs: map[string]string{},
+		capped:   map[string]time.Time{},
 	}
 }
 
 // newTransport 出厂 Transport：禁 h2 + ResponseHeaderTimeout 兜底。
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到会无限挂。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	return &http.Transport{
 		DisableKeepAlives:     false,
@@ -78,25 +66,11 @@ func (c *Client) base() string {
 	return defaultBaseURL
 }
 
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
 func (c *Client) httpClient() *http.Client {
 	if c.HTTP == nil {
 		c.HTTP = &http.Client{Timeout: 120 * time.Second, Transport: newTransport()}
 	}
 	return c.HTTP
-}
-
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 // applyHeaders 统一出站头。
@@ -123,165 +97,6 @@ func keyOf(a *auth.Auth) string {
 // ---------------------------------------------------------------------------
 // 对话
 // ---------------------------------------------------------------------------
-
-// ChatStream 实现 provider.Upstream：返回上游流（200）或已读尽的错误响应。
-//
-// 状态码会经 effectiveStatus **还原被网关压平的内层码**（实测外层恒 500），
-// 让客户端与 handler 看到真正的 429/401/404；响应体保持原文（不变量 8 的偏离已在注释说明）。
-//
-// 地区限制自动改道（决议 R57）：直连命中 IsRegionBlocked ⇒ 同一次请求内经**备用上游通道**
-// 重放一次；未配置备用通道则原样透传失败。重试全部在本方法内完成，handler/账号惩罚/
-// 粘性路由对该机制无感（备用链路只是换出口 IP，不是换账号）。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
-	m := modelOf(body)
-	if m == "" {
-		return nil, http.StatusBadRequest, []byte(`{"error":{"message":"model is required"}}`), nil
-	}
-	// 本地校验：集合 == 暴露集 == free[]（构造即一致）；目录未拉到过时放行（fail-open）。
-	// R42 的教训：校验过严会误拒上游新模型，故冷启动不拦、集合跟随上游同步。
-	if !c.knownModel(m) {
-		return nil, http.StatusNotFound,
-			[]byte(fmt.Sprintf(`{"error":{"message":"model not found in cline free catalog: %s",
-			"code":"model_not_found"}}`, jsonEscape(m))), nil
-	}
-
-	out := clampMaxTokens(body)
-	out = forceStream(out)
-	key := keyOf(a)
-
-	// 编排抽到 backuplink.Replay（R62）：渠道只提供「怎么发一发」与「什么算地区限制」，
-	// 其余语义（首因不被掩盖、备用拨不动则回落直连、学习路由随配置作废）全渠道共用一份，
-	// 避免 cline/oczen 各写一遍后改一处漏一处（R52 的教训）。
-	rp := &backuplink.Replay{
-		Kind:   "cline",
-		Model:  m,
-		Routes: &c.routes,
-		Attempt: func(useBackup bool) (*http.Response, error) {
-			return c.attempt(out, key, useBackup)
-		},
-		Blocked:   IsRegionBlocked,
-		Wrap:      func(resp *http.Response) io.ReadCloser { return c.openStream(resp) },
-		Finalize:  func(_ int, body string) { c.noteCap(m, body) },
-		Translate: effectiveStatus,
-	}
-	rc, status, raw, err := rp.Do()
-	if err != nil || rc != nil || status == http.StatusOK {
-		return rc, status, raw, err
-	}
-	return nil, status, raw, nil
-}
-
-// noteCap 命中共享出口上限文案时记模型级冷却（不罚账号）。
-func (c *Client) noteCap(m, body string) {
-	if IsCapBody(body) {
-		c.markCapped(m, capCooldown)
-		log.Printf("cline: 模型触上限 model=%s（不罚账号，已标记冷却）", m)
-	}
-}
-
-// attempt 发一发出站对话请求：useBackup 决定出口（直连 or 备用上游通道）。
-// 重放时重新构造请求（body 已在内存，无需 GetBody），两个出口共用同一构造器
-// ⇒ 头完全一致：X-CLIENT-TYPE 缺失会恒回 403，重放少了它会把「代理也没用」误判成代理故障。
-func (c *Client) attempt(out []byte, key string, useBackup bool) (*http.Response, error) {
-	cli := c.streamClient()
-	if useBackup {
-		bc := c.backupClient()
-		if bc == nil {
-			return nil, backuplink.ErrNoBackup
-		}
-		cli = bc
-	}
-	req, err := http.NewRequest(http.MethodPost, c.base()+EpChat, bytes.NewReader(out))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	applyHeaders(req, key)
-	return cli.Do(req)
-}
-
-// openStream 把 200 响应包成带空闲兜底的流（R35：不用 Client.Timeout，靠 IdleReader）。
-func (c *Client) openStream(resp *http.Response) io.ReadCloser {
-	return provider.NewIdleReader(resp.Body, c.idleTimeout())
-}
-
-// backupClient 返回绑定备用上游通道的 client（未配置返回 nil = 只能直连）。
-// base 取流式 client 的 Transport：只改出口，其余超时/协议参数与出厂一致。
-func (c *Client) backupClient() *http.Client {
-	tr, _ := c.streamClient().Transport.(*http.Transport)
-	return backuplink.Client(tr)
-}
-
-// regionLearned 报告该模型是否已学到「直连被地区拒、只能走备用」（测试与日志用）。
-func (c *Client) regionLearned(m string) bool { return c.routes.Learned(m) }
-
-// forceStream 强制上游 stream:true（不变量 1）。
-//
-// **为什么必须有**（2026-10-12 实测踩坑）：本渠道把客户端 body 原样转发，而 handler 对上游
-// 响应**一律按 SSE 解析** —— 流式走 Stream、非流式客户端走 Aggregate，二者都只认 `data:` 帧。
-// 客户端发 `stream:false`（或干脆不带 stream）时，上游会回**非流式 JSON 信封**，解析器找不到
-// 任何 data 帧 ⇒ `errEmptyStream` ⇒ 502 `upstream_parse`，且该错误被当作账号连续错误
-// ⇒ 冷却整条渠道（实测：一次非流式请求后，四个免费模型全部 503 no_healthy_account 约 60s）。
-//
-// 讽刺的是 sse.go 的 Aggregate 注释早已假定「本渠道永远请求 stream=true（不变量 1）」，
-// 但 ChatStream 此前只做了 clampMaxTokens，并未落实该假定 —— 这就是 bug 本身。
-// 非流式客户端由 handler 本地聚合（Aggregate），与 oczen/monkeycode 同款做法。
-func forceStream(body []byte) []byte {
-	var obj map[string]any
-	if json.Unmarshal(body, &obj) != nil {
-		return body
-	}
-	if v, _ := obj["stream"].(bool); v {
-		return body // 已是 true，零改动原样返回（不重新 marshal，避免无谓的键序变化）
-	}
-	obj["stream"] = true
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-// clampMaxTokens 治理输出上限（实测：8→上游 400；16→500 empty response content；
-// 64~200000 全通；1e6→拒）。**客户端未给时一律不传** —— 不传最稳，实测可自由跑 3242 token
-// 且正常出内容；强行补一个小值反而会制造「空回答」。
-func clampMaxTokens(body []byte) []byte {
-	var obj map[string]any
-	if json.Unmarshal(body, &obj) != nil {
-		return body
-	}
-	if v, ok := obj["max_tokens"]; ok {
-		n := toInt(v)
-		switch {
-		case n <= 0:
-			delete(obj, "max_tokens") // 0/负数/非数值：视同未给
-		case n < minUpstreamMaxTokens:
-			obj["max_tokens"] = minUpstreamMaxTokens
-		case n > maxUpstreamMaxTokens:
-			obj["max_tokens"] = maxUpstreamMaxTokens
-		}
-	}
-	// 同步治理 OpenAI 新字段名（上游只认 max_tokens；带 max_completion_tokens 时按同规则夹）
-	if v, ok := obj["max_completion_tokens"]; ok {
-		n := toInt(v)
-		if n > 0 {
-			if n < minUpstreamMaxTokens {
-				n = minUpstreamMaxTokens
-			}
-			if n > maxUpstreamMaxTokens {
-				n = maxUpstreamMaxTokens
-			}
-			obj["max_completion_tokens"] = n
-		} else {
-			delete(obj, "max_completion_tokens")
-		}
-	}
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return body
-	}
-	return out
-}
 
 // ---------------------------------------------------------------------------
 // 凭据探针（面板添加 Key 用：零对话成本，只读自己的 Key 列表）
@@ -405,39 +220,6 @@ func (c *Client) Classify(status int, body string) provider.ErrKind { return Cla
 // ---------------------------------------------------------------------------
 
 var modelRE = regexp.MustCompile(`"model"\s*:\s*"([^"]+)"`)
-
-// modelOf 从请求体里取模型名（不做完整反序列化，省一次分配）。
-func modelOf(body []byte) string {
-	if m := modelRE.FindSubmatch(body); len(m) == 2 {
-		return strings.TrimSpace(string(m[1]))
-	}
-	return ""
-}
-
-func toInt(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case json.Number:
-		i, _ := n.Int64()
-		return int(i)
-	case string:
-		var i int
-		_, _ = fmt.Sscanf(n, "%d", &i)
-		return i
-	}
-	return 0
-}
-
-func jsonEscape(s string) string {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return `"?"`
-	}
-	return string(b)
-}
 
 // getJSON 发一个 GET 并回原始 body（带 Bearer，虽然两个目录端点实测无需鉴权）。
 func (c *Client) getJSON(a *auth.Auth, path string) (json.RawMessage, error) {

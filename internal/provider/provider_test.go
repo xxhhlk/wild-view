@@ -92,30 +92,6 @@ func TestLogBody(t *testing.T) {
 	}
 }
 
-func TestLogParams(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.6-luna","stream":true,"max_tokens":32000,` +
-		`"thinking":{"type":"enabled"},"messages":[{"role":"user","content":"hi"}],` +
-		`"tools":[{"type":"function","function":{"name":"t"}}],"user":"u-1","instructions":"` + strings.Repeat("x", 300) + `"}`)
-	got := LogParams(body)
-	for _, unwanted := range []string{"messages", "tools", "function"} {
-		if strings.Contains(got, unwanted) {
-			t.Errorf("参数摘要不应含 %q：%s", unwanted, got)
-		}
-	}
-	for _, want := range []string{`"max_tokens":32000`, `"thinking":{"type":"enabled"}`, `"stream":true`} {
-		if !strings.Contains(got, want) {
-			t.Errorf("参数摘要缺少 %s：%s", want, got)
-		}
-	}
-	if !strings.Contains(got, "...") {
-		t.Errorf("超长字符串应截断：%s", got)
-	}
-
-	if got := LogParams([]byte("{broken")); got != "{broken" {
-		t.Errorf("非 JSON 应原样返回，得到 %q", got)
-	}
-}
-
 func TestSummarizeExpiring(t *testing.T) {
 	items := []ResourceItem{
 		{Remain: 100, Usable: true, ExpireAt: timeNow().Format("2006-01-02")},
@@ -145,28 +121,21 @@ func TestInfoOnlyExcluded(t *testing.T) {
 	}
 }
 
-// TestIsModelScopedSoftRate 判定软限流是否只作用于当前模型。
-// 特征串取自上游 6004 频率限流原文；未命中时返回 false（账号级）是刻意的保守选择——
-// 账号级最坏多冷却一个账号（有号可轮换），误判成模型级会让 N 个模型各白撞一次。
-func TestIsModelScopedSoftRate(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want bool
-	}{
-		{
-			"6004 频率限流（原文声明可换其他模型）",
-			`{"code":6004,"msg":"usage exceeds frequency limit, but don't worry, your usage will reset at 2026-09-28 22:37:01 UTC+8, alternatively, you can switch to the other models to continue using it.","requestId":"r1"}`,
-			true,
-		},
-		{"大小写不敏感", `{"msg":"You Can Switch To The Other Models"}`, true},
-		{"账号级限流（无特征串）", `{"code":9999,"msg":"too many requests"}`, false},
-		{"14018 积分耗尽（账号级）", `{"code":14018,"msg":"quota exceeded"}`, false},
-		{"空 body", ``, false},
+func TestSupportsPureCheckin(t *testing.T) {
+	pure := map[Kind]bool{
+		WorkBuddy: true, TraeWork: true, QoderCN: true, QoderCOM: true,
+		Raccoon: true, Loomy: true, MonkeyCode: true, OfficeAce: true,
+		Minimax: true, LobsterAI: true, CodeArts: true,
 	}
-	for _, c := range cases {
-		if got := IsModelScopedSoftRate(c.body); got != c.want {
-			t.Errorf("%s: got=%v want=%v", c.name, got, c.want)
+	for kind := range BuiltinKinds() {
+		k := Kind(kind)
+		if got := SupportsPureCheckin(k); got != pure[k] {
+			t.Errorf("SupportsPureCheckin(%q)=%v，期望%v", k, got, pure[k])
+		}
+	}
+	for _, k := range []Kind{WorkBuddyAI, GLM, Kind("custom")} {
+		if SupportsPureCheckin(k) {
+			t.Errorf("%q 不应提供纯签到", k)
 		}
 	}
 }

@@ -31,18 +31,12 @@ import (
 
 	"wild-view/internal/auth"
 	"wild-view/internal/provider"
-	"wild-view/internal/upstream"
 )
 
 // Client 上游 HTTP 客户端。导出 Base / Daily / Sandbox / TokenURL 便于测试注入假上游。
 type Client struct {
 	// HTTP 用于非流式请求（配额 / 探测 / 续期），带总超时。
 	HTTP *http.Client
-	// StreamHTTP 用于对话 SSE：**不设**整体 Timeout，避免长回答在超时点被掐断且无终止帧
-	// （R35）。卡死由空闲看门狗（IdleTimeout）兜底。
-	StreamHTTP *http.Client
-	// IdleTimeout 流中空闲上限；<=0 时回落到 DefaultIdleTimeout。
-	IdleTimeout time.Duration
 
 	// Base 覆盖**全部**端点（测试注入假上游用，见 NewWithBase）。
 	Base string
@@ -69,9 +63,9 @@ type quotaCacheEntry struct {
 func New() *Client {
 	tr := newTransport()
 	return &Client{
-		HTTP:        &http.Client{Timeout: requestTimeout, Transport: tr},
-		StreamHTTP:  &http.Client{Transport: tr}, // 共用 Transport，不设 Timeout
-		IdleTimeout: DefaultIdleTimeout,
+		HTTP: &http.Client{Timeout: requestTimeout, Transport: tr},
+		// 共用 Transport，不设 Timeout
+
 	}
 }
 
@@ -84,7 +78,7 @@ func NewWithBase(base string) *Client {
 
 // newTransport 出厂 Transport：禁 h2 + 连接池 + ResponseHeaderTimeout 兜底。
 //
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到就会无限挂住。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	return &http.Transport{
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{}, // 强制 HTTP/1.1
@@ -98,22 +92,6 @@ func newTransport() *http.Transport {
 			KeepAlive: 15 * time.Second,
 		}).DialContext,
 	}
-}
-
-// endpoints 返回推理用的端点轮换顺序：`[daily, sandbox]`（协议 §2.1）。
-func (c *Client) endpoints() []string {
-	if b := strings.TrimRight(strings.TrimSpace(c.Base), "/"); b != "" {
-		return []string{b}
-	}
-	daily := strings.TrimRight(strings.TrimSpace(c.Daily), "/")
-	if daily == "" {
-		daily = DailyHost
-	}
-	sandbox := strings.TrimRight(strings.TrimSpace(c.Sandbox), "/")
-	if sandbox == "" {
-		sandbox = SandboxHost
-	}
-	return []string{daily, sandbox}
 }
 
 // sandboxHost 返回沙箱端点基址（配额与探测**固定**走它，协议 §2.1）。
@@ -133,22 +111,6 @@ func (c *Client) tokenURL() string {
 		return s
 	}
 	return TokenEndpoint
-}
-
-// streamClient 返回流式调用用的客户端（nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 // ---------------------------------------------------------------------------
@@ -173,85 +135,6 @@ func identityHeaders(req *http.Request, token string) {
 // ---------------------------------------------------------------------------
 // provider.Upstream：对话
 // ---------------------------------------------------------------------------
-
-// ChatStream 把内层 OpenAI Chat 请求体翻成 v1internal 信封后发往流式端点。
-//
-// 返回约定（与其它渠道一致，handler 依赖它做分类与透传）：
-//   - 传输错误   → (nil, 0, nil, err)（仅在**所有**端点都失败时）；
-//   - HTTP ≥ 400 → (nil, status, 上游原始响应体, nil)；原文透传，不包装（不变量 8）；
-//   - 200        → (带空闲看门狗的 body, 200, nil, nil)。
-//
-// 出站体不可构造（请求 JSON 非法 / 模型不在目录 / 消息为空 / 图片读不到）时返回
-// **本地 400 + 错误体**而不是 err：err 会被 handler 当成传输层错误去惩罚健康账号。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
-	token := tokenOf(a)
-	if token == "" {
-		return nil, http.StatusUnauthorized,
-			localErrorBody(http.StatusUnauthorized, "session_dead", "gemini：账号没有 access_token"), nil
-	}
-
-	// project：凭据真值 → 进程内缓存 → 现探（探测失败**不发推理**，协议 §2.7）。
-	project, err := c.resolveProject(a)
-	if err != nil {
-		status := http.StatusBadGateway
-		var ue *provider.Error
-		if errors.As(err, &ue) && ue.Status > 0 {
-			status = ue.Status
-		}
-		return nil, status,
-			localErrorBody(status, "upstream_error", "gemini：project 探测失败，未发推理（"+err.Error()+"）"), nil
-	}
-	out, code, err := buildInternalBody(body, project)
-	if err != nil {
-		return nil, http.StatusBadRequest, localErrorBody(http.StatusBadRequest, code, "gemini："+err.Error()), nil
-	}
-
-	eps := c.endpoints()
-	var lastErr error
-	for i, ep := range eps {
-		req, err := http.NewRequest(http.MethodPost, ep+EpStreamGenerate+StreamQuery, bytes.NewReader(out))
-		if err != nil {
-			return nil, 0, nil, err
-		}
-		identityHeaders(req, token)
-		resp, err := c.streamClient().Do(req)
-		if err != nil {
-			lastErr = err
-			if i < len(eps)-1 {
-				continue // 传输层失败 → 换下一个端点（协议 §2.1 的轮换顺序）
-			}
-			return nil, 0, nil, err
-		}
-		if resp.StatusCode >= 400 {
-			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-			_ = resp.Body.Close()
-			// 5xx 属上游故障：换下一个端点再试一次；其余状态原样透传给 Classify。
-			if resp.StatusCode >= 500 && i < len(eps)-1 {
-				lastErr = fmt.Errorf("gemini：端点 %s 返回 %d", ep, resp.StatusCode)
-				continue
-			}
-			return nil, resp.StatusCode, raw, nil
-		}
-		return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
-	}
-	if lastErr == nil {
-		lastErr = errors.New("gemini：没有可用端点")
-	}
-	return nil, 0, nil, lastErr
-}
-
-// Stream 把上游流（v1internal SSE）转成 OpenAI SSE 后交给统一规范化层。
-// model 是客户端请求的原始模型名，用于回填每个 chunk 的 model 字段。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	var usage map[string]any
-	err := upstream.StreamCapture(w, newGeminiStream(r, model), func(u map[string]any) { usage = u })
-	return usage, err
-}
-
-// Aggregate 把上游流收敛成单个 OpenAI chat.completion 响应（非流式客户端走这里）。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) {
-	return upstream.Aggregate(newGeminiStream(r, model))
-}
 
 // ---------------------------------------------------------------------------
 // provider.Upstream：续期
@@ -516,21 +399,6 @@ func tokenOf(a *auth.Auth) string {
 		return ""
 	}
 	return strings.TrimSpace(a.AccessTokenValue())
-}
-
-// localErrorBody 构造本地拒绝的 OpenAI 风格错误体。
-// code 同时驱动上层 Classify（bad_params / prompt_too_long / session_dead）。
-func localErrorBody(status int, code, msg string) []byte {
-	if code == "" {
-		code = errCodeBadParams
-	}
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": msg,
-		"type":    "invalid_request_error",
-		"code":    code,
-		"status":  status,
-	}})
-	return b
 }
 
 // oauthErrorMessage 取 OAuth 错误响应里的可读文本（error / error_description / message）。

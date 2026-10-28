@@ -57,4 +57,5 @@ internal/<channel>/            各渠道查询客户端（目录/倍率/额度�
   新增渠道若签到需要先发消息，必须排除。
 - **构建**：`CGO_ENABLED=0 go build -tags devdump -ldflags "-H windowsgui" -o dist/wild-view.exe ./cmd/wild-view`。
 - **验证**：`go build ./... && go vet ./... && go test ./... && node scripts/ui-static-check.mjs`。
-  `internal/raccoon` 的两个日额度测试依赖固定日期，属存量失败，与改动无关。
+  日额度测试夹具使用相对当前时间的到期日期；验证失败必须排查，不得按固定日期的存量失败忽略。
+  `.github/workflows/verify.yml` 在 push、PR 与手动触发时执行上述检查；手动发布复用验证并固定到已通过的提交。

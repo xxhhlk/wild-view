@@ -1,13 +1,11 @@
 package oczen
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"wild-view/internal/provider"
 )
@@ -88,47 +86,6 @@ func TestDescendingTimePartLayout(t *testing.T) {
 	}
 }
 
-// TestEnsureAgentShape 免费档要求 stream=true 且 tools 含 bash/read。
-func TestEnsureAgentShape(t *testing.T) {
-	// 纯聊天：无 tools → 注入两个桩工具并置 tool_choice=none
-	chat := map[string]any{"stream": false, "messages": []any{map[string]any{"role": "user", "content": "hi"}}}
-	ensureAgentShape(chat)
-	if chat["stream"] != true {
-		t.Fatalf("stream 未强制为 true: %v", chat["stream"])
-	}
-	if chat["tool_choice"] != "none" {
-		t.Fatalf("纯聊天应置 tool_choice=none: %v", chat["tool_choice"])
-	}
-	names := toolNames(chat)
-	if !names["bash"] || !names["read"] {
-		t.Fatalf("桩工具未补齐: %v", names)
-	}
-
-	// 客户端自带工具：只补缺失的，且不得覆盖客户的 tool_choice
-	withTools := map[string]any{
-		"stream": false, "tool_choice": "auto",
-		"tools": []any{map[string]any{"type": "function", "function": map[string]any{"name": "Edit"}}},
-	}
-	ensureAgentShape(withTools)
-	n2 := toolNames(withTools)
-	if !n2["Edit"] || !n2["bash"] || !n2["read"] {
-		t.Fatalf("客户端工具或桩工具缺失: %v", n2)
-	}
-	if withTools["tool_choice"] != "auto" {
-		t.Fatalf("客户端 tool_choice 被覆盖: %v", withTools["tool_choice"])
-	}
-
-	// 已自带 bash/read 时不应重复注入
-	dup := map[string]any{"tools": []any{
-		map[string]any{"type": "function", "function": map[string]any{"name": "bash"}},
-		map[string]any{"type": "function", "function": map[string]any{"name": "read"}},
-	}}
-	ensureAgentShape(dup)
-	if n := len(dup["tools"].([]any)); n != 2 {
-		t.Fatalf("重复注入桩工具，tools=%d", n)
-	}
-}
-
 func toolNames(obj map[string]any) map[string]bool {
 	out := map[string]bool{}
 	tools, _ := obj["tools"].([]any)
@@ -177,83 +134,6 @@ func TestFilterFree(t *testing.T) {
 	}
 }
 
-// TestChatStreamRequestShape 端到端校验发往上游的请求头与请求体形态
-// （免费档三道闸门：规范会话头 + 伪装头齐套 + 智能体形态请求体）。
-func TestChatStreamRequestShape(t *testing.T) {
-	var gotH http.Header
-	var gotBody map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotH = r.Header.Clone()
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &gotBody)
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: {\"model\":\"mimo-v2.6-flash-free\",\"choices\":[]}\n\ndata: [DONE]\n\n")
-	}))
-	defer srv.Close()
-
-	c := NewWithBase(srv.URL)
-	body := `{"model":"mimo-v2.6-flash-free","stream":false,"messages":[{"role":"user","content":"say ok"}]}`
-	rc, status, _, err := c.ChatStream(AnonymousAuth(), []byte(body))
-	if err != nil || status != 200 {
-		t.Fatalf("ChatStream 失败: status=%d err=%v", status, err)
-	}
-	defer rc.Close()
-
-	if got := gotH.Get("Authorization"); got != "Bearer "+AnonymousKey {
-		t.Errorf("匿名凭证错误: %q", got)
-	}
-	if got := gotH.Get("x-opencode-client"); got != "cli" {
-		t.Errorf("x-opencode-client 错误: %q", got)
-	}
-	for _, k := range []string{"x-opencode-session", "x-opencode-session-id", "x-session-affinity", "X-Session-Id"} {
-		if got := gotH.Get(k); !strings.HasPrefix(got, "ses_") || len(got) != 30 {
-			t.Errorf("%s 非规范会话形状: %q", k, got)
-		}
-	}
-	// 2026-10-14 起上游把 x-opencode-request 列为 403 触发头（见 R69/headered），
-	// 一旦发出即被拒；这里锁死「不得再发」。
-	if got := gotH.Get("x-opencode-request"); got != "" {
-		t.Errorf("不得发送 x-opencode-request（上游 2026-10-14 起对携带该头的请求回 403）: %q", got)
-	}
-	// project 必须是裸 40 位小写 hex（prj_ 前缀的规范形态会被拒 403）。
-	proj := gotH.Get("x-opencode-project")
-	if len(proj) != 40 || strings.HasPrefix(proj, "prj_") {
-		t.Errorf("x-opencode-project 必须是裸 40 位 hex（不得带 prj_ 前缀），实际: %q", proj)
-	}
-	for _, ch := range proj {
-		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
-			t.Errorf("x-opencode-project 含非小写 hex 字符: %q", proj)
-			break
-		}
-	}
-	if gotBody["stream"] != true {
-		t.Errorf("请求体未强制 stream=true: %v", gotBody["stream"])
-	}
-	if n := toolNames(gotBody); !n["bash"] || !n["read"] {
-		t.Errorf("请求体缺少 bash/read 桩工具: %v", n)
-	}
-}
-
-// TestChatStreamPassthroughError 上游 4xx 原文透传（含分类）。
-func TestChatStreamPassthroughError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"RegionError","message":"This model is not available in your country."}}`)
-	}))
-	defer srv.Close()
-	c := NewWithBase(srv.URL)
-	_, status, raw, err := c.ChatStream(AnonymousAuth(), []byte(`{"model":"muse-spark-1.3-contributor-free","messages":[]}`))
-	if err != nil {
-		t.Fatalf("不应返回传输错误: %v", err)
-	}
-	if status != 403 || !strings.Contains(string(raw), "RegionError") {
-		t.Fatalf("上游响应未透传: status=%d body=%s", status, raw)
-	}
-	if k := c.Classify(status, string(raw)); k != provider.ErrPassthrough {
-		t.Fatalf("地域受限 403 必须归为透传（不累错不冷却，单账号渠道一冷却即整渠道下线）: %v", k)
-	}
-}
-
 // TestFetchModelsFallsBackToStatic 上游不可达时回静态免费清单，不报错。
 func TestFetchModelsFallsBackToStatic(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -297,34 +177,6 @@ func TestFetchModelsFilters(t *testing.T) {
 	}
 }
 
-// TestStreamRewritesModel 流式响应中的 model 字段回填成客户端模型名。
-func TestStreamRewritesModel(t *testing.T) {
-	in := strings.NewReader("data: {\"id\":\"x\",\"model\":\"mimo-v2.6-flash-free\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
-	rec := httptest.NewRecorder()
-	if _, err := New().Stream(rec, in, "oczen/mimo-v2.6-flash-free"); err != nil {
-		t.Fatalf("Stream 失败: %v", err)
-	}
-	out := rec.Body.String()
-	if !strings.Contains(out, `"model":"oczen/mimo-v2.6-flash-free"`) {
-		t.Fatalf("model 未回填: %s", out)
-	}
-	if !strings.Contains(out, `"content":"ok"`) || !strings.Contains(out, "[DONE]") {
-		t.Fatalf("流内容被破坏: %s", out)
-	}
-}
-
-// TestAggregateRewritesModel 非流式聚合结果回填客户端模型名。
-func TestAggregateRewritesModel(t *testing.T) {
-	in := strings.NewReader("data: {\"id\":\"x\",\"model\":\"big-pickle\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
-	resp, err := New().Aggregate(in, "oczen/big-pickle")
-	if err != nil {
-		t.Fatalf("Aggregate 失败: %v", err)
-	}
-	if resp["model"] != "oczen/big-pickle" {
-		t.Fatalf("model 未回填: %v", resp["model"])
-	}
-}
-
 // TestClassify 单账号渠道的错误分类：只有 429 才该冷却账号。
 func TestClassify(t *testing.T) {
 	c := New()
@@ -361,64 +213,6 @@ func TestAnonymousAuthShape(t *testing.T) {
 	if a.NeedsRefresh(365 * 24 * 60 * 60 * 1e9) {
 		t.Fatal("虚拟账号不应需要刷新（ExpiresAt 必须为远期值）")
 	}
-}
-
-
-// TestStreamClientHasNoTotalTimeout 守门：流式必须走**无总超时**的 client。
-//
-// http.Client.Timeout 是整请求上限，SSE 整个生成期都在读 body ⇒ 长思考请求会被从流中间
-// 掐断。非流式 client 必须保留总超时（短请求的合理兜底）。
-func TestStreamClientHasNoTotalTimeout(t *testing.T) {
-	c := New()
-	if c.StreamHTTP == nil {
-		t.Fatal("StreamHTTP 必须存在")
-	}
-	if c.StreamHTTP.Timeout != 0 {
-		t.Fatalf("StreamHTTP.Timeout = %v，必须为 0（流式不能有整请求上限）", c.StreamHTTP.Timeout)
-	}
-	if c.HTTP == nil || c.HTTP.Timeout <= 0 {
-		t.Fatalf("非流式 HTTP.Timeout = %v，必须 > 0", c.HTTP.Timeout)
-	}
-	// 无总超时后必须靠 ResponseHeaderTimeout 兜底，否则连响应头都等不到会无限挂住。
-	tr, ok := c.StreamHTTP.Transport.(*http.Transport)
-	if !ok || tr == nil {
-		t.Fatalf("StreamHTTP.Transport = %T，应为 *http.Transport", c.StreamHTTP.Transport)
-	}
-	if tr.ResponseHeaderTimeout <= 0 {
-		t.Fatal("StreamHTTP 必须有 ResponseHeaderTimeout 兜底")
-	}
-	if tr.TLSNextProto == nil {
-		t.Fatal("应强制 HTTP/1.1（禁 h2）")
-	}
-}
-
-// TestIdleTimeoutDefaults 未注入配置时回落默认值（装配漏注入不应退化成「无兜底」）。
-func TestIdleTimeoutDefaults(t *testing.T) {
-	c := New()
-	if got := c.idleTimeout(); got != DefaultIdleTimeout {
-		t.Fatalf("idleTimeout() = %v, want %v", got, DefaultIdleTimeout)
-	}
-	c.IdleTimeout = 33 * time.Second
-	if got := c.idleTimeout(); got != 33*time.Second {
-		t.Fatalf("idleTimeout() = %v, want 33s", got)
-	}
-}
-
-// TestChatStreamWrapsIdleReader 守门：对话流返回体必须包空闲看门狗。
-func TestChatStreamWrapsIdleReader(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: [DONE]\n\n")
-	}))
-	defer srv.Close()
-	c := NewWithBase(srv.URL)
-	rc, status, _, err := c.ChatStream(AnonymousAuth(), []byte(
-		`{"model":"mimo-v2.6-flash-free","stream":false,"messages":[{"role":"user","content":"say ok"}]}`))
-	if err != nil || status != 200 {
-		t.Fatalf("chat: status=%d err=%v", status, err)
-	}
-	defer rc.Close()
-	_ = rc // 上游 oczen 的流包装由 internal/idle 提供，类型不导出，这里只校验请求成功
 }
 
 // TestBaseSelectsLaneByCredential 基址必须按车道分流（R69）。

@@ -35,77 +35,6 @@ var realReadProtectedText = readProtectedText
 
 // ---- R-1：安装根候选 ----
 
-func TestInstallRootsIncludesWindowsPerUserPrograms(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("per-user 安装根候选是 Windows 语义（依赖 %LOCALAPPDATA%）")
-	}
-	local := t.TempDir()
-	appdata := t.TempDir()
-	// installRoots 先做 os.Stat 存在性过滤（既有语义、不在本次改动内），故先把候选目录建出来。
-	want := filepath.Join(local, "Programs", "OfficeAce")
-	for _, d := range []string{want, filepath.Join(local, "OfficeAce"), filepath.Join(appdata, "OfficeAce")} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			t.Fatalf("建候选目录失败：%v", err)
-		}
-	}
-	t.Setenv("LOCALAPPDATA", local)
-	t.Setenv("APPDATA", appdata)
-	t.Setenv("OFFICEACE_INSTALL_DIR", "")
-
-	roots := installRoots(nil)
-	if !containsStr(roots, want) {
-		t.Fatalf("installRoots() 缺 per-user 候选 %q；实际候选=%v", want, roots)
-	}
-	// 顺带覆盖 %LOCALAPPDATA%\OfficeAce 与 %APPDATA%\OfficeAce 变体。
-	if alt := filepath.Join(local, "OfficeAce"); !containsStr(roots, alt) {
-		t.Fatalf("installRoots() 缺 %q；实际候选=%v", alt, roots)
-	}
-	if alt := filepath.Join(appdata, "OfficeAce"); !containsStr(roots, alt) {
-		t.Fatalf("installRoots() 缺 %q；实际候选=%v", alt, roots)
-	}
-	// 去重：同一路径只能出现一次。
-	if n := countStr(roots, want); n != 1 {
-		t.Fatalf("installRoots() 候选重复：%q 出现 %d 次；实际候选=%v", want, n, roots)
-	}
-}
-
-// TestInstallRootsInfersPerUserRootWithoutLocalAppData：%LOCALAPPDATA% 缺失时的兜底推导必须落在
-// <用户目录>\AppData\Local\Programs\OfficeAce；**不得**落到 <用户目录>\AppData\Programs\OfficeAce
-//（后者是「用 filepath.Dir(os.UserConfigDir()) 当 Local」这一错误的产物，本用例专挡它）。
-func TestInstallRootsInfersPerUserRootWithoutLocalAppData(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("per-user 安装根候选是 Windows 语义")
-	}
-	base := t.TempDir()
-	userProfile := filepath.Join(base, "u")
-	appData := filepath.Join(userProfile, "AppData")
-	local := filepath.Join(appData, "Local")
-	inferred := filepath.Join(local, "Programs", "OfficeAce")
-	buggy := filepath.Join(appData, "Programs", "OfficeAce") // 「取 AppData 而非 AppData\Local」的产物
-	fromConfigDir := filepath.Join(local, "OfficeAce")       // UserConfigDir 同级 Local 的第二个候选
-	for _, d := range []string{inferred, fromConfigDir} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			t.Fatalf("建候选目录失败：%v", err)
-		}
-	}
-	t.Setenv("LOCALAPPDATA", "")                                // 模拟缺失
-	t.Setenv("USERPROFILE", userProfile)                        // 推导 ①
-	t.Setenv("APPDATA", filepath.Join(appData, "Roaming"))      // 推导 ②（os.UserConfigDir 的来源）
-	t.Setenv("OFFICEACE_INSTALL_DIR", "")
-
-	roots := installRoots(nil)
-	if !containsStr(roots, inferred) {
-		t.Fatalf("LOCALAPPDATA 缺失时未推导出 %q（localAppDataCandidate()=%q，目录存在=%v）；实际候选=%v",
-			inferred, localAppDataCandidate(), dirExists(inferred), roots)
-	}
-	if !containsStr(roots, fromConfigDir) {
-		t.Fatalf("LOCALAPPDATA 缺失时未由 UserConfigDir 推出 %q；实际候选=%v", fromConfigDir, roots)
-	}
-	if containsStr(roots, buggy) {
-		t.Fatalf("兜底推错目录：出现了 %q（应为 %q）；实际候选=%v", buggy, inferred, roots)
-	}
-}
-
 // ---- R-2：档案名匹配（'%3A' 编码名 / ':' 解码名 / 编码优先） ----
 
 func TestOAuthProfileNameCandidatesPreferEncodedForm(t *testing.T) {
@@ -342,20 +271,8 @@ func restoreTestReadProtectedText(t *testing.T) {
 	t.Cleanup(func() { readProtectedTextFn = realReadProtectedText })
 }
 
-func containsStr(list []string, want string) bool { return countStr(list, want) > 0 }
-
 // dirExists 供断言消息区分「推导错路径」与「推导为空/目录不存在」。
 func dirExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
-}
-
-func countStr(list []string, want string) int {
-	n := 0
-	for _, s := range list {
-		if s == want {
-			n++
-		}
-	}
-	return n
 }

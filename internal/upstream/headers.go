@@ -51,38 +51,6 @@ func CommonHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("Accept-Language", acceptLanguageFor(a))
 }
 
-// ChatHeaders 在 common 之上加 chat 专属的账号头。
-// 缺省字段用 X-No-* 约定（与 CodeBuddy 官方 CLI 一致）。
-//
-// conv / turn 是 conversationAnchors 抽出的会话锚点（国内版此前完全不发 X-Conversation-ID，
-// 属单边裸奔 —— 见 R116）；锚点为空时退回每请求随机，行为与历史一致。
-func ChatHeaders(req *http.Request, a *auth.Auth, conv, turn string) {
-	CommonHeaders(req, a)
-	if at := a.AccessTokenValue(); at != "" {
-		req.Header.Set("Authorization", "Bearer "+at)
-	} else {
-		req.Header.Set("X-No-Authorization", "1")
-	}
-	if a.UID != "" {
-		req.Header.Set("X-User-Id", a.UID)
-	} else {
-		req.Header.Set("X-No-User-Id", "1")
-	}
-	if a.EnterpriseID != "" {
-		req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
-	} else {
-		req.Header.Set("X-No-Enterprise-Id", "1")
-	}
-	// 安全红线：绝不在 chat 请求里携带 X-Refresh-Token。
-	if a.Domain != "" {
-		req.Header.Set("X-Domain", a.Domain)
-	} else {
-		req.Header.Set("X-No-Department-Info", "1")
-	}
-	injectAttribution(req, a)
-	injectConversationHeaders(req, a, conv, turn)
-}
-
 // BillingHeaders billing 接口请求头。
 func BillingHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
@@ -112,46 +80,9 @@ func RefreshHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("X-Auth-Refresh-Source", "plugin")
 }
 
-// injectAttribution 注入归属头——按官方桌面客户端的实际取值（R117）：
-// X-Product 取 product.json 的 deploymentType（SaaS），X-Private-Data 默认 true，
-// X-Agent-Intent 缺省 craft（cli.mjs: meta["codebuddy.ai/mode"] ?? "craft"）。
-func injectAttribution(req *http.Request, a *auth.Auth) {
-	req.Header.Set("X-Agent-Intent", "craft")
-	req.Header.Set("X-Agent-Purpose", "conversation")
-	req.Header.Set("X-IDE-Name", "WorkBuddy")
-	req.Header.Set("X-IDE-Type", "WorkBuddy")
-	req.Header.Set("X-IDE-Version", defaultClientVer)
-	req.Header.Set("X-Product", "SaaS")
-	req.Header.Set("X-Private-Data", "true")
-}
-
-// injectConversationHeaders 注入会话头族（X-Conversation-* / B3 链路）。
-//
-// 语义与形态见同目录 convheaders.go：会话级恒定、轮级一次 user send（工具回调/重试复用）、
-// 调用级每请求新生成；X-Root-Request-ID 取本轮 id（官方主对话同形）。
-// B3 是每请求链路头，仍跟调用级 id 走。
-func injectConversationHeaders(req *http.Request, a *auth.Auth, conv, turn string) {
-	uid := ""
-	if a != nil {
-		uid = a.UID
-	}
-	msgID := newMessageID()
-	turnID := turnIDOf(uid, conv, turn)
-	req.Header.Set("X-Conversation-ID", conversationID(uid, conv))
-	req.Header.Set("X-Conversation-Request-ID", turnID)
-	req.Header.Set("X-Conversation-Message-ID", msgID)
-	req.Header.Set("X-Request-ID", msgID)
-	req.Header.Set("X-Root-Request-ID", turnID)
-	req.Header.Set("X-B3-TraceId", msgID)
-	req.Header.Set("X-B3-SpanId", msgID[:16])
-	req.Header.Set("X-B3-Sampled", "1")
-}
-
 func acceptLanguageFor(a *auth.Auth) string {
 	if a != nil && a.Region() == "global" {
 		return "en-US"
 	}
 	return "zh-CN"
 }
-
-

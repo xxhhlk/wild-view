@@ -25,22 +25,10 @@ import (
 // 本包只负责上游调用与桌面协议底层能力。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断。
-	// 本渠道是「剥离档位、走上游默认最深思考」，生成期天然更长，风险同 loomy。
-	// 空闲兜底改由 IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout。⚠️ 目前**没有配置项**（main 不注入），实际恒为默认值。
-	// 注意它只管「拿到响应头之后」那段；等响应头另由 Transport.ResponseHeaderTimeout
-	// 兜底（R118：≥180s，本渠道上游首字节常态 60~100s）。
-	IdleTimeout time.Duration
 
 	// liveMu 保护 liveIDs（动态目录缓存）。
 	//
-	// 为什么需要它：ChatStream 会本地校验模型名（上游对未知模型静默回落，见 KnownModel），
+	// 为什么需要它：本地会校验模型名（上游对未知模型静默回落，见 KnownModel），
 	// 但**只能用静态表** ⇒ 上游目录新增的模型（如 sn-sensenova-6-8-flash）会被本地误拒，
 	// 而同一个模型正被 /v1/models 正常透出（它读的是动态目录）——"面板列出却调不动"。
 	// 故每次 fetchCatalog 成功后把目录记下来，供校验时与静态表取并集。
@@ -71,9 +59,6 @@ func (c *Client) authBaseURL() string {
 	return BaseURL
 }
 
-// DefaultIdleTimeout 流式空闲超时默认值（与 loomy 对齐，见其注释）。
-const DefaultIdleTimeout = 90 * time.Second
-
 // 等响应头（TTFB）的上限与硬下限（R118）。
 //
 // 为什么必须 ≥180s：小浣熊的 LLM 网关是**缓冲式**的——即便请求带 stream:true，
@@ -88,7 +73,7 @@ const (
 	minHeaderTimeout = 180 * time.Second
 )
 
-// New 默认下限配置的客户端（仅作用于非流式调用；流式见 StreamHTTP）。
+// New 默认下限配置的客户端（查询请求统一使用）。
 func New() *Client { return NewWithTimeout(defaultHeaderTimeout) }
 
 // NewWithTimeout 指定非流式整请求超时。
@@ -106,15 +91,14 @@ func NewWithTimeout(timeout time.Duration) *Client {
 		headerTimeout = timeout
 	}
 	return &Client{
-		HTTP:       &http.Client{Timeout: timeout, Transport: newTransport(headerTimeout)},
-		StreamHTTP: &http.Client{Transport: newTransport(headerTimeout)},
+		HTTP: &http.Client{Timeout: timeout, Transport: newTransport(headerTimeout)},
 	}
 }
 
 // newTransport 出厂 Transport：禁 h2 + Dial/keepalive + TLS 握手 + ResponseHeaderTimeout。
 //
 // ⚠️ 此前本包 `&http.Client{Timeout: ...}` 未设 Transport，实际在共用 http.DefaultTransport
-// （h2 开启、无 ResponseHeaderTimeout）。StreamHTTP 无总超时后**必须**有
+// （h2 开启、无 ResponseHeaderTimeout）。查询请求必须有
 // ResponseHeaderTimeout 兜底，否则连响应头都等不到就会无限挂住。
 func newTransport(headerTimeout time.Duration) *http.Transport {
 	if headerTimeout <= 0 {
@@ -141,26 +125,10 @@ func (c *Client) httpClient() *http.Client {
 	return c.HTTP
 }
 
-// streamClient 返回流式调用用的客户端（无总超时）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport(0)}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
-}
-
 func accessToken(a *auth.Auth) string { return strings.TrimSpace(a.AccessTokenValue()) }
 
 // do 发一次带 Bearer 的请求（body 为 nil 时视为无请求体）。
-// 只用于非流式调用；流式（ChatStream）需要保留 resp.Body，另行实现。
+// 查询请求统一走这里（响应体一次性读完，不保留流）。
 func (c *Client) do(method, url string, a *auth.Auth, body []byte) (*http.Response, []byte, error) {
 	var rdr io.Reader
 	if body != nil {
@@ -293,117 +261,7 @@ func jwtExp(tok string) int64 {
 // 推理
 // ---------------------------------------------------------------------------
 
-// ChatStream 发流式（或非流式）对话请求。
-// 返回 (resp.Body, status, nil, nil) 表示成功；上游 4xx/5xx 时返回 (nil, status, body, nil)。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	// 模型名本地校验：阶段 C 实测确认上游对未知模型**静默回落到默认模型**并返回 200，
-	// 不校验会让用户以为在用 A 模型、实际消耗 B 模型的额度。
-	// 校验集合 = 静态表 ∪ 已拉取到的动态目录（后者由 FetchModels/FetchModelPricing 填充）。
-	if m := modelOf(body); m != "" && !c.knownModel(m) {
-		return nil, http.StatusBadRequest, []byte(unknownModelBody(m)), nil
-	}
-	orig := body
-	body = forceUpstreamDeepThinking(body)
-	logReasoningStrip(orig, body)
-
-	req, err := http.NewRequest(http.MethodPost, c.baseURL()+EpChat, bytes.NewReader(body))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken(a))
-	// 用无总超时的 client：长思考请求不受整请求上限约束（见 Client.StreamHTTP）。
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		_ = resp.Body.Close()
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
-}
-
-// logReasoningStrip 记一行剥离日志（对齐 qoder 三渠道的排障约定）。
-//
-// 动机：剥离是**静默**的，出问题时无法判断「客户端到底有没有发档位」。
-// 特意打 info 级（不是 debug）：该行为反直觉，日志里留痕便于事后核对。
-func logReasoningStrip(orig, stripped []byte) {
-	// 只有「原本有、剥完没」才算真剥离 —— 逐字节相等说明本就没该字段（或非法 JSON
-	// 原样返回），无信息量不打日志。
-	if bytes.Equal(orig, stripped) {
-		return
-	}
-	var probe struct {
-		Model           string `json:"model"`
-		ReasoningEffort string `json:"reasoning_effort"`
-	}
-	if err := json.Unmarshal(orig, &probe); err != nil {
-		return
-	}
-	log.Printf("raccoon reasoning: model=%q stripped=%q (走上游默认=最深)", probe.Model, probe.ReasoningEffort)
-}
-
-// forceUpstreamDeepThinking 移除 `reasoning_effort`，强制走上游默认（= 深度思考）。
-//
-// 取证结论（2026-09-24 VM 实测，多轮交叉采样）：
-//
-//  1. 官方客户端的「深度思考 / 快速」按钮产出 `enable_deep_thinking`（布尔，默认 false），
-//     但那是 **agent 层**参数（`POST {base}/sessions/{id}/chat-conversations`、
-//     `plans/execute-async` 才吃它）。本渠道对接的 LLM 网关对该字段直接 **500**：
-//     `AsyncCompletions.create() got an unexpected keyword argument 'enable_deep_thinking'`。
-//
-//  2. LLM 网关认的是标准 `reasoning_effort`（客户端 LLM 层是 @ai-sdk/openai-compatible，
-//     其 settings.reasoningEffort → reasoning_effort；SDK 声明域 low/medium/high）。
-//
-//  3. **但实测方向与直觉相反**：同 prompt 交叉采样（reasoning_tokens，权威指标）——
-//
-//     无字段（上游默认）  rtok = 2300 / 2147 / 2133 / 4067 / 1167 / 2241
-//     reasoning_effort=high  rtok = 142 / 260 / 331 / 135 / 98 / 145
-//     reasoning_effort=low   rtok = 0
-//     reasoning_effort=none  rtok = 1803（另有 0 与 7 的样本，见下）
-//
-//     即：**上游默认档本身就是最深思考，下发任何 `reasoning_effort` 都会削弱它**
-//     （litellm 侧把该字段映射成一个偏保守的思考预算）。fast 标签模型上同样成立
-//     （sn-glm-5-3-flash：默认 rtok=26 > high=8 > medium=7 > none=0）。
-//
-// 因此「确保用的是深度思考」的做法是**删除**该字段而非下发 high —— 这正是本渠道
-// 不接入档位（`SupportsEffortKind` 不含 raccoon）的原因：客户端若表达了档位
-// （WorkBuddy 的档位选择器、面板默认档），一律在此被剥离，保证实际走深度思考。
-//
-// 代价：客户端**无法**通过档位让该渠道走"快速"（那需要换用 fast 标签的模型）。
-// 这是取证的必然结果 —— 下发 low 也未必等于快速（实测 0 与 1803 并存，行为不稳定）。
-func forceUpstreamDeepThinking(body []byte) []byte {
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return body
-	}
-	if _, ok := obj["reasoning_effort"]; !ok {
-		return body
-	}
-	delete(obj, "reasoning_effort")
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-// modelOf 取请求体里的 model（解析失败返回空串）。
-func modelOf(body []byte) string {
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(probe.Model)
-}
-
-// knownModel 模型名是否可接受（ChatStream 的本地校验入口）。
+// knownModel 模型名是否可接受（本地模型校验入口）。
 //
 // 判据 = KnownModel（静态表 + 默认模型 + 客户端别名） ∪ 已拉取到的动态目录。
 // 动态部分**必须**参与：/v1/models 透出的是动态目录（FetchModels 的结果），
@@ -434,16 +292,6 @@ func (c *Client) rememberLiveModels(ids ...string) {
 	}
 }
 
-// unknownModelBody 未知模型时返回的 OpenAI 风格 400（不请求上游）。
-func unknownModelBody(m string) string {
-	b, _ := json.Marshal(map[string]any{"error": map[string]any{
-		"message": fmt.Sprintf("raccoon: 未知模型 %q。上游对未知模型会静默回落到默认模型，故本地直接拒绝；可用模型见 GET /v1/models", m),
-		"type":    "invalid_request_error",
-		"code":    "model_not_found",
-	}})
-	return string(b)
-}
-
 // ---------------------------------------------------------------------------
 // 模型与费率
 // ---------------------------------------------------------------------------
@@ -460,12 +308,12 @@ type catalogResp struct {
 }
 
 type catalogModel struct {
-	Name              string   `json:"name"`
-	ModelName         string   `json:"model_name"`
-	Description       string   `json:"description"`
-	DisplayDesc       string   `json:"display_description"`
+	Name              string          `json:"name"`
+	ModelName         string          `json:"model_name"`
+	Description       string          `json:"description"`
+	DisplayDesc       string          `json:"display_description"`
 	BillingMultiplier json.RawMessage `json:"billing_multiplier"`
-	Tags              []string `json:"tags"`
+	Tags              []string        `json:"tags"`
 	Params            struct {
 		ContextWindow int64 `json:"context_window"`
 		MaxTokens     int64 `json:"max_tokens"`
@@ -491,7 +339,7 @@ func (c *Client) fetchCatalog(a *auth.Auth) (*catalogResp, []catalogModel, error
 	for _, cat := range out.Data.Categories {
 		models = append(models, cat.Models...)
 	}
-	// 记下本次目录里的模型名，供 ChatStream 的本地校验取并集
+	// 记下本次目录里的模型名，供本地模型校验取并集
 	// （否则上游新增模型会被误拒，而 /v1/models 已把它列出来）。
 	ids := make([]string, 0, len(models))
 	for _, m := range models {
@@ -834,7 +682,7 @@ func (c *Client) Classify(status int, body string) provider.ErrKind { return Cla
 func Classify(status int, body string) provider.ErrKind {
 	lower := strings.ToLower(body)
 
-	// 本地拒绝的未知模型（见 ChatStream）：请求级错误，不罚号。
+	// 本地拒绝的未知模型：请求级错误，不罚号。
 	if strings.Contains(lower, "model_not_found") {
 		return provider.ErrBadParams
 	}

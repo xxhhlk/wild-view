@@ -14,11 +14,11 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
+
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
+
 	"fmt"
 	"net/http"
 	"net/url"
@@ -39,18 +39,6 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`
 
 var serverPubKey *rsa.PublicKey
-
-func init() {
-	block, _ := pem.Decode([]byte(serverPubKeyPEM))
-	if block == nil {
-		panic("bad server pubkey PEM")
-	}
-	k, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		panic(err)
-	}
-	serverPubKey = k.(*rsa.PublicKey)
-}
 
 // CosySession 每账号的签名状态。
 type CosySession struct {

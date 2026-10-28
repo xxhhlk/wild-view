@@ -18,16 +18,6 @@
         <div class="sub" id="serverLine"></div>
       </div>
     </div>
-    <div class="top-info" style="display:none">
-      <div class="info-cell">
-        <span class="info-label">OpenAI接口</span>
-        <code class="info-value" id="apiAddr" title="点击复制地址；进入设置修改"><span class="val"></span></code>
-      </div>
-      <div class="info-cell">
-        <span class="info-label">API-Key</span>
-        <code class="info-value" id="apiKeyDisplay" title="点击复制密钥；进入设置修改"><span class="val"></span></code>
-      </div>
-    </div>
     <div class="top-icons">
       <span class="icon-link gear" id="btnSettings" title="设置">⚙</span>
       <span class="icon-link" id="btnHelp" title="帮助">?</span>
@@ -274,7 +264,7 @@
   </div>
 </div>
 
-<!-- 设置弹层（统一配置入口：监听/API-Key/模型路由/备用上游通道） -->
+<!-- 设置弹层（统一配置入口：监听、管理密码、纯签到、开机自启、临期阈值） -->
 <div class="overlay hidden" id="settingsOverlay">
   <div class="modal modal-wide">
     <div class="modal-title">设置</div>
@@ -295,7 +285,7 @@
         </div>
         <div id="customHostRow" class="row hidden"><input id="inHost" class="input grow" placeholder="如 192.168.1.100" spellcheck="false"></div>
         <div class="row">
-          <label class="lbl wide" title="面板登录口令（与给 AI 客户端用的 API-Key 是两套）">管理密码<span id="adminPassReq" class="req hidden" title="监听非本机地址时必填">*</span></label>
+          <label class="lbl wide" title="面板登录口令">管理密码<span id="adminPassReq" class="req hidden" title="监听非本机地址时必填">*</span></label>
           <input id="adminPassInput" class="input grow" type="password" spellcheck="false" placeholder="留空 = 面板不鉴权（仅本机监听时允许）" autocomplete="new-password">
         </div>
         <div class="row" style="align-items:center">
@@ -341,8 +331,6 @@
           <span class="hint" style="margin-left:8px">程序随系统启动自动运行</span>
         </div>
       </div>
-
-      <!-- 备用上游通道（R57：单一地址，仅上游按地区拒绝时按需取用） -->
     </div>
     <div class="modal-actions">
       <button class="btn small" id="btnSettingsCancel">取消</button>
@@ -372,7 +360,7 @@
     <div class="modal-title">配置说明</div>
     <div class="modal-body docs">
       <p>1. 本程序只读取账号额度与模型倍率，<b>不提供任何会话转发接口</b>：<code>/v1/*</code> 一律返回 404，
-         也不存在 API 地址与 API-Key 配置。</p>
+         也不存在任何转发入口。</p>
       <p>2. 添加账号后会自动完成登录，并在后台按周期刷新额度与模型目录。单个账号失败不影响其他账号。</p>
       <p>3. 「全部刷新积分」立即查询所有账号的最新余额；余额变化曲线记录的是每次查询成功时的实际值，
          下降可能来自消耗、到期或套餐回收，不等同于对话消耗。</p>
@@ -391,7 +379,7 @@
           <li>使用本工具可能<b>违反上游平台的服务条款</b>，存在<b>账号被限制、封禁或追责的风险</b>，请自行评估并承担全部后果。</li>
           <li>请使用小号或可承受损失的账号接入，<b>切勿将主力账号用于本工具</b>。</li>
           <li>本工具仅限<b>个人学习与研究</b>用途，严禁用于商业用途或大规模滥用；请遵守各上游平台服务条款与当地法律法规。</li>
-          <li>监听 <code>0.0.0.0</code> 会将 API 与账号管理暴露给局域网，<strong>必须配置管理密码</strong>（面板登录用，与 API-Key 是两套凭据）；请确认网络环境可信。</li>
+          <li>监听 <code>0.0.0.0</code> 会将 API 与账号管理暴露给局域网，<strong>必须配置管理密码</strong>（面板登录用）；请确认网络环境可信。</li>
           <li>本软件按"现状"提供，作者不对使用本软件造成的任何直接或间接损失（含账号损失、积分损失、数据丢失等）承担责任。</li>
           <li>本软件与上游各平台（WorkBuddy/CodeBuddy、TraeWork、Qoder、千问办公、OpenCode 等）无任何关联，商标权归其各自所有者。</li>
         </ul>

@@ -21,23 +21,9 @@ import (
 // Client 国际版上游 HTTP 客户端。Base 可覆盖以便测试。
 type Client struct {
 	HTTP *http.Client
-	// StreamHTTP 专供对话流式请求：**无总超时**。
-	//
-	// 为什么必须分开：http.Client.Timeout 是整请求上限（计时器在 Do() 返回后继续跑，
-	// 直到 body 读完），而 SSE 整个生成期都在读 body —— 长思考请求会被从流中间掐断
-	// （实测最长 15582 completion tokens）。客户端表现为「突然无响应」。空闲兜底改由
-	// IdleReader 承担。
-	StreamHTTP *http.Client
-	// IdleTimeout 流式空闲超时：连续该时长读不到任何字节即判上游卡死。
-	// 0 = 用 DefaultIdleTimeout。由 main 装配时注入 config.upstream.stream_idle_seconds。
-	IdleTimeout time.Duration
-	Base        string // 默认 https://www.workbuddy.ai
-}
 
-// DefaultIdleTimeout 流式空闲超时默认值。
-//
-// 实测正常请求 8~40s 完成（同一模型），90s 足够宽松——只拦「真的一个字节都不出」。
-const DefaultIdleTimeout = 90 * time.Second
+	Base string // 默认 https://www.workbuddy.ai
+}
 
 // New 生产默认。配置连接池减少 TLS 握手。
 func New() *Client { return NewWithTimeout(120 * time.Second) }
@@ -45,15 +31,15 @@ func New() *Client { return NewWithTimeout(120 * time.Second) }
 // NewWithTimeout 指定非流式超时。Transport 与 CN 同构：禁 h2 + Dial/keepalive/TLS 握手 + ResponseHeaderTimeout。
 func NewWithTimeout(timeout time.Duration) *Client {
 	return &Client{
-		HTTP:       &http.Client{Timeout: timeout, Transport: newTransport()},
-		StreamHTTP: &http.Client{Transport: newTransport()},
-		Base:       WBAIHost,
+		HTTP: &http.Client{Timeout: timeout, Transport: newTransport()},
+
+		Base: WBAIHost,
 	}
 }
 
 // newTransport 出厂 Transport：禁 h2 + Dial/keepalive/TLS 握手 + ResponseHeaderTimeout。
 //
-// StreamHTTP 无总超时后**必须**有 ResponseHeaderTimeout，否则连响应头都等不到就会无限挂住。
+// ResponseHeaderTimeout 兜底：上游迟迟不回响应头时不至于无限挂住。
 func newTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 15 * time.Second}
 	return &http.Transport{
@@ -65,22 +51,6 @@ func newTransport() *http.Transport {
 		IdleConnTimeout:       30 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second,
 	}
-}
-
-// streamClient 返回流式调用用的客户端（无总超时，回落新建保证 nil 安全）。
-func (c *Client) streamClient() *http.Client {
-	if c.StreamHTTP == nil {
-		c.StreamHTTP = &http.Client{Transport: newTransport()}
-	}
-	return c.StreamHTTP
-}
-
-// idleTimeout 生效的空闲超时（未注入时用默认值）。
-func (c *Client) idleTimeout() time.Duration {
-	if c.IdleTimeout <= 0 {
-		return DefaultIdleTimeout
-	}
-	return c.IdleTimeout
 }
 
 // NewWithBase 测试用：覆盖 base。
@@ -116,66 +86,6 @@ func commonHeaders(req *http.Request) {
 	req.Header.Set("Referer", originRef+"/")
 	req.Header.Set("User-Agent", clientUA)
 	req.Header.Set("Accept-Language", "en-US")
-}
-
-// chatHeaders 对话专有头：Authorization 族 + X-No-* 缺省约定。
-// 安全红线：绝不携带 X-Refresh-Token。
-//
-// 会话头族（X-Conversation-*）是上游渠道校验的对象：2026-10-16 起国际版新增
-// 抽样校验，缺会话头族的请求被判「非官方客户端」，返回 400 code=11128
-// "conversation id missing"（displayTips 明示"没通过渠道校验"）。
-// 定位与 A/B 实证（同凭据同 body 只差三个头：缺 X-Conversation-* 恒 400、
-// 带齐恒 200）见 ardeyouxipianyi/workbuddy2api-hub#380（修复 PR #381，对
-// 官方客户端 5.8.4 抓包核验）、CangShui/workbuddy-gateway#20、
-// ithtelab/workbuddy-manager#193。实测只在 body 加 conversationId 无效，
-// 头族才是校验对象（#193）。
-//
-// conv / turn 来自 conversationAnchors（会话级 / 轮级锚点），三层语义见同目录 convheaders.go：
-// 会话 id 同会话恒定、轮 id 一次 user send 一个值（重试与换号复用）、
-// 调用 id 每请求新生成。锚点为空时退回随机（历史行为）。
-func chatHeaders(req *http.Request, a *auth.Auth, conv, turn string) {
-	commonHeaders(req)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
-	if a.UID != "" {
-		req.Header.Set("X-User-Id", a.UID)
-	} else {
-		req.Header.Set("X-No-User-Id", "1")
-	}
-	if a.EnterpriseID != "" {
-		req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
-	} else {
-		req.Header.Set("X-No-Enterprise-Id", "1")
-	}
-	req.Header.Set("X-Domain", wbaiDomain)
-	injectAttributionWBAI(req)
-	// 会话头族按三层语义分层（见同目录 convheaders.go）：
-	//	X-Conversation-ID         会话级（带连字符 UUID，官方抓包形态）
-	//	X-Conversation-Request-ID 轮级（32 hex，工具回调/重试/换号复用）
-	//	X-Conversation-Message-ID 调用级（32 hex，每次上游请求新生成）
-	//	X-Root-Request-ID       = 本轮 Request-ID（官方主对话同形）
-	// 旧实现把四个头绑成同一个值且每请求现生成，等于把一次多轮对话拆成上千个
-	// 一次性会话——hub#381 明确指出这是反作弊视角下最明显的非人类形态（R116）。
-	msgID := newMessageID()
-	turnID := turnIDOf(a.UID, conv, turn)
-	req.Header.Set("X-Conversation-ID", conversationID(a.UID, conv))
-	req.Header.Set("X-Conversation-Request-ID", turnID)
-	req.Header.Set("X-Conversation-Message-ID", msgID)
-	req.Header.Set("X-Request-ID", msgID)
-	req.Header.Set("X-Root-Request-ID", turnID)
-}
-
-func injectAttributionWBAI(req *http.Request) {
-	// 取值与官方桌面客户端一致（R117，本机 WorkBuddy.app 5.8.3 静态解包取证）：
-	// X-Agent-Intent 缺省 craft、X-Product 取 product.json 的 deploymentType（SaaS）、
-	// X-Private-Data 默认 true、X-IDE-Version 是桌面版本而不是 CLI 版本。
-	req.Header.Set("X-Agent-Intent", "craft")
-	req.Header.Set("X-Agent-Purpose", "conversation")
-	req.Header.Set("X-IDE-Name", "WorkBuddy")
-	req.Header.Set("X-IDE-Type", "WorkBuddy")
-	req.Header.Set("X-IDE-Version", clientVersion)
-	req.Header.Set("X-Product", "SaaS")
-	req.Header.Set("X-Private-Data", "true")
 }
 
 // billingHeaders 余额 / 签到接口头。
@@ -291,79 +201,6 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 	log.Printf("workbuddyai refresh success uid=%s refresh_rotated=%t expires_at=%d",
 		a.UID, a.RefreshToken != oldRefresh, a.ExpiresAt)
 	return nil
-}
-
-// ChatStream 发对话请求并返回原始 SSE body 流（调用方负责 Close）。
-// 非 2xx 时 rc=nil、respBody=上游响应体（供调用方 Classify）、err=nil；
-// 仅传输层失败才返回 err。
-//
-// 对网关类 5xx（502/503/504）与瞬态传输错误做有限重试（见 retry.go）；
-// 4xx 不重试（风控/余额/参数语义，重试无益）——**唯一例外是上游显式声明
-// `retry_policy.retry=true` 或 `actions` 含 `RETRY` 的 429**（14003 瞬时拥塞；
-// 2026-10-17 上游形态漂移后只下发 actions）：上游自己说可重试，
-// 此时直接抛错并让上层罚号，会把一次可自愈的抖动放大成渠道级 503。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	conv, turn := conversationAnchors(body)
-	prepared := PrepareBody(body)
-	rateLimitRetries := 0
-	for attempt := 1; attempt <= retryMaxAttempts; attempt++ {
-		rc, status, respBody, err = c.chatStreamOnce(a, prepared, conv, turn)
-		ok, isRateLimit := retryDecision(status, respBody, err)
-		if !ok {
-			return rc, status, respBody, err
-		}
-		if attempt == retryMaxAttempts {
-			break
-		}
-		if isRateLimit {
-			// 收紧的独立预算：只重试一次，且不占用 5xx 的重试额度。
-			// 429 频繁重试有风控风险，宁可少试也不能刷屏。
-			rateLimitRetries++
-			if rateLimitRetries >= rateLimitMaxAttempts {
-				break
-			}
-			log.Printf("workbuddyai chat_stream uid=%s: 上游 429 显式声明可重试（retry_policy.retry=true），%v 后重试 (%d/%d)",
-				a.UID, rateLimitBackoff.Round(time.Millisecond), rateLimitRetries, rateLimitMaxAttempts-1)
-			time.Sleep(rateLimitBackoff)
-			continue
-		}
-		why := fmt.Sprintf("http %d", status)
-		if err != nil {
-			why = err.Error()
-		}
-		wait := backoff(attempt)
-		log.Printf("workbuddyai chat_stream uid=%s: %s，%v 后重试 (%d/%d)",
-			a.UID, truncate(why, 80), wait.Round(time.Millisecond), attempt, retryMaxAttempts)
-		time.Sleep(wait)
-	}
-	return rc, status, respBody, err
-}
-
-// chatStreamOnce 单次对话请求（不做重试）。
-func (c *Client) chatStreamOnce(a *auth.Auth, prepared []byte, conv, turn string) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	req, err := http.NewRequest(http.MethodPost, c.base()+EpChat, bytes.NewReader(prepared))
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	chatHeaders(req, a, conv, turn)
-	// 用无总超时的 client：长思考请求不受整请求上限约束（见 Client.StreamHTTP），
-	// 流中卡死由下方 provider.NewIdleReader 兜底（保留本仓方案，不引入第二条超时链）。
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		log.Printf("workbuddyai chat_stream uid=%s: transport error: %v", a.UID, err)
-		return nil, 0, nil, err
-	}
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		log.Printf("workbuddyai chat_stream uid=%s: upstream %d %s body=%s req=%s",
-			a.UID, resp.StatusCode, Classify(resp.StatusCode, string(raw)), provider.LogBody(string(raw)), provider.LogParams(prepared))
-		return nil, resp.StatusCode, raw, nil
-	}
-	// 空闲看门狗兜底：连续 idleTimeout 读不到字节即判上游卡死并关掉 body。
-	// 流式与 stream:false 的聚合路径共用这一层（聚合时由「总时长硬上限」
-	// 变为「空闲上限」，长而持续输出的响应不再被误杀）。
-	return provider.NewIdleReader(resp.Body, c.idleTimeout()), resp.StatusCode, nil, nil
 }
 
 // FetchModels 拉取国际版模型目录。
@@ -599,99 +436,10 @@ func expireDay(ts string) string {
 	return provider.ExpireDate(expireDate(ts))
 }
 
-// DailyCheckin 国际版的「每日活跃」任务：用免费模型对话一次保持账号活跃，
-// 并顺带探测签到活动是否开启（开启则自动领取）。
-//
-// 之所以复用 DailyCheckin 接口：调度器已在每个签到时刻对每个绑定账号调用它，
-// 正好满足「签到定时器每次触发时每个账号对话一次」的要求，无需新增调度路径。
-//
-// 对用户透明：不产生前端界面、不写签到状态标记（RecordCheckin 由调度器按
-// 返回结果自行处理，这里始终返回 nil 以避免污染签到状态）。
-func (c *Client) DailyCheckin(a *auth.Auth) error {
-	// 1) 签到活动探测 + 领取（国际版当前通常返回 10001 未开启，属正常）
-	c.tryClaimCheckin(a)
-	// 2) 免费模型对话一次，保持活跃
-	c.pokeActivity(a)
-	return nil
-}
-
-// tryClaimCheckin 探测签到活动；仅当 active 且未领取时才调用领取端点。
-// 任何失败静默忽略（活动未开启是常态，不应污染账号健康状态）。
-func (c *Client) tryClaimCheckin(a *auth.Auth) {
-	req, err := http.NewRequest(http.MethodPost, c.base()+"/billing/meter/checkin-activity-status", bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return
-	}
-	billingHeaders(req, a)
-	data, err := c.doJSON(req)
-	if err != nil {
-		log.Printf("workbuddyai activity probe uid=%s: %v", a.UID, truncate(err.Error(), 120))
-		return
-	}
-	var st struct {
-		Active         bool `json:"active"`
-		TodayCheckedIn bool `json:"today_checked_in"`
-		DailyCredit    int  `json:"daily_credit"`
-	}
-	if json.Unmarshal(data, &st) != nil || !st.Active || st.TodayCheckedIn {
-		return
-	}
-	req2, err := http.NewRequest(http.MethodPost, c.base()+EpDailyCheckin, bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return
-	}
-	billingHeaders(req2, a)
-	if _, err := c.doJSON(req2); err != nil {
-		log.Printf("workbuddyai checkin claim uid=%s: %v", a.UID, truncate(err.Error(), 120))
-		return
-	}
-	log.Printf("workbuddyai checkin claimed uid=%s daily_credit=%d", a.UID, st.DailyCredit)
-}
-
-// pokeActivity 用免费模型发一次最小对话请求，保持账号活跃。
-// 模型严格取自 freeModels（实测 x0.00，不扣积分）；全部失败时静默放弃。
-func (c *Client) pokeActivity(a *auth.Auth) {
-	payload, _ := json.Marshal(map[string]any{
-		"model":      freeModels[0],
-		"stream":     true,
-		"max_tokens": 16,
-		"messages": []map[string]any{
-			{"role": "system", "content": "You are a helpful assistant."},
-			{"role": "user", "content": "hi"},
-		},
-	})
-	for _, m := range freeModels {
-		var p map[string]any
-		_ = json.Unmarshal(payload, &p)
-		p["model"] = m
-		raw, _ := json.Marshal(p)
-		rc, status, _, err := c.ChatStream(a, raw)
-		if err != nil {
-			log.Printf("workbuddyai activity poke uid=%s model=%s: %v", a.UID, m, truncate(err.Error(), 120))
-			continue
-		}
-		if rc == nil {
-			log.Printf("workbuddyai activity poke uid=%s model=%s: upstream %d", a.UID, m, status)
-			continue
-		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(rc, 1<<20))
-		rc.Close()
-		log.Printf("workbuddyai activity poke uid=%s model=%s ok", a.UID, m)
-		return
-	}
-	log.Printf("workbuddyai activity poke uid=%s: all free models failed", a.UID)
+// DailyCheckin 本渠道签到依赖对话，不支持。
+func (c *Client) DailyCheckin(_ *auth.Auth) error {
+	return fmt.Errorf("workbuddyai：签到依赖对话，当前不支持")
 }
 
 // Classify 实现 provider.Upstream。
 func (c *Client) Classify(status int, body string) provider.ErrKind { return Classify(status, body) }
-
-// Stream 实现 provider.Upstream（国际版已是 OpenAI SSE，直接透传）。
-// 返回值为末帧捕获的 usage（供记账，上游未返回时为 nil）。
-func (c *Client) Stream(w http.ResponseWriter, r io.Reader, model string) (map[string]any, error) {
-	var usage map[string]any
-	err := StreamCapture(w, r, func(u map[string]any) { usage = u })
-	return usage, err
-}
-
-// Aggregate 实现 provider.Upstream。
-func (c *Client) Aggregate(r io.Reader, model string) (map[string]any, error) { return Aggregate(r) }

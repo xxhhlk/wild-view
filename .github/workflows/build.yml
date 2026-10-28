@@ -6,7 +6,13 @@ on:
   workflow_dispatch:
 
 jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ github.event_name == 'push' && github.ref || 'master' }}
+
   build:
+    needs: verify
     strategy:
       matrix:
         include:
@@ -46,16 +52,12 @@ jobs:
             suffix: ""
     runs-on: ${{ matrix.os }}
     steps:
-      # workflow_dispatch 手动触发按钮只在默认分支（master）显示，但构建目标始终是 dev；
-      # tag 触发（push v*）则构建对应 tag 的代码
-      #
-      # fetch-depth: 0 —— 拉全历史。用途只有一个：让下方「末尾换行检查」能用
-      # `origin/master...HEAD` 拿到真实的改动文件集。浅克隆实测下该 diff 恒为空
-      # （不创建 remote-tracking ref、HEAD~1 也不存在），会使那一步形同虚设。
-      # 代价是 checkout 变慢，对这个仓库规模可忽略。
+      # 手动发布仍构建 master；固定到验证通过的 SHA，避免分支推进后发布未经验证的代码。
+      # 完整历史供下方末尾换行提示检查使用。
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'push' && github.ref || 'master' }}
+          ref: ${{ needs.verify.outputs.commit }}
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
@@ -78,13 +80,7 @@ jobs:
           OUT="dist/wild-view-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
           go build -tags devdump -ldflags "${{ matrix.ldflags }}" -o "$OUT" ./cmd/wild-view
 
-      # 前端静态检查（脚本随仓库走，见 scripts/ui-static-check.mjs）：
-      # 断言冷却标签/汇总条渲染正确，且顶层函数/常量**不得重复定义**
-      # （曾出现 renderSummary 写了两版、前者成死代码，node --check 与功能测试都发现不了）。
-      # 只在单个矩阵项执行，避免 5 个平台重复跑。
-      - name: Frontend static check
-        if: matrix.name == 'linux-amd64'
-        run: node scripts/ui-static-check.mjs
+      # Go 与前端检查已由 verify 门禁统一执行。
 
       # 文本文件末尾换行检查（**纯提示，不阻断构建**）。
       #
@@ -156,15 +152,15 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [verify, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          # tag 触发（push v*）→ 检出该 tag 代码；手动触发 → 检出 dev 分支代码
-          ref: ${{ github.event_name == 'push' && github.ref || 'master' }}
+          # 发布说明与构建产物必须来自同一份已验证代码。
+          ref: ${{ needs.verify.outputs.commit }}
 
       # 注意顺序：先 checkout 再 download-artifact，否则 git 检出会覆盖 artifacts/
       - uses: actions/download-artifact@v4
