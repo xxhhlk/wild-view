@@ -219,4 +219,4 @@ jobs:
           fi
           gh release create "$DEV_TAG" release-assets/* --prerelease \
             --title "Dev Build $(date '+%Y-%m-%d %H:%M')" \
-            --notes "Dev 分支自动构建（commit ${{ github.sha }}）"
+            --notes "Dev 分支自动构建（commit ${{ needs.verify.outputs.commit }}）"
