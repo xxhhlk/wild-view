@@ -5,9 +5,14 @@ import (
 	"time"
 )
 
+// cnZone 产品口径固定 UTC+8。测试夹具必须用它而不是 cnZone()：
+// 到期日串按 UTC+8 解析（provider.ExpireInstant），若基准时间取 runner 本地时区，
+// 同一份夹具在 UTC runner 上算出的剩余小时会整体少 8 小时。
+func cnZone() *time.Location { return time.FixedZone("UTC+8", 8*60*60) }
+
 // 日历日差：今天=0、明天=1、后天=2（回归「hours/24 截断把明天算成 0 天」的实测 bug）。
 func TestDaysUntil(t *testing.T) {
-	loc := time.Local
+	loc := cnZone()
 	now := time.Date(2026, 9, 21, 23, 40, 0, 0, loc) // 深夜：最易触发截断误差
 	cases := []struct {
 		day  time.Time
@@ -31,7 +36,7 @@ func TestBurnForecast(t *testing.T) {
 	s := newTestStats(t)
 	// 用当天正午做基准，避免 +1h 跨过午夜触发跨天重置
 	now := time.Now()
-	base := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.Local)
+	base := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, cnZone())
 	expiry := base.AddDate(0, 0, 3).Format("2006-01-02")
 
 	// 首次喂入确立基线（burnSince=base）
@@ -62,7 +67,7 @@ func TestBurnForecast(t *testing.T) {
 func TestExpiryFullList(t *testing.T) {
 	s := newTestStats(t)
 	now := time.Now()
-	base := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.Local)
+	base := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, cnZone())
 	accts := []Account{
 		{UID: "a", Group: "workbuddy", Credits: 100},
 		{UID: "b", Group: "workbuddy", Credits: 100},
@@ -103,7 +108,7 @@ func TestExpiryFullList(t *testing.T) {
 // 平台表空行过滤须把 ExpireToday 纳入（仅有今日到期的平台不该被整行剔除）。
 func TestExpireToday(t *testing.T) {
 	s := newTestStats(t)
-	base := time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)
+	base := time.Date(2026, 9, 30, 12, 0, 0, 0, cnZone())
 	today := base.Format("2006-01-02")
 	tomorrow := base.AddDate(0, 0, 1).Format("2006-01-02")
 	s.ApplyPoll([]Account{
@@ -147,7 +152,7 @@ func TestExpireToday(t *testing.T) {
 func TestApplyExpiryClears(t *testing.T) {
 	s := newTestStats(t)
 	now := time.Now()
-	base := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.Local)
+	base := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, cnZone())
 	s.ApplyPoll([]Account{{UID: "a", Group: "workbuddy", Credits: 100}}, base)
 	s.ApplyExpiry("a", []ExpireItem{{At: base.AddDate(0, 0, 2).Format("2006-01-02"), Amount: 300}})
 	if rows := s.Snapshot(base).Expiry; len(rows) != 1 {
@@ -338,7 +343,7 @@ func TestTraeAllocationDeductsExpire(t *testing.T) {
 func TestExpireBucketsByInstant(t *testing.T) {
 	s := newTestStats(t)
 	// 基准 2026-10-19 14:00（UTC+8）
-	base := time.Date(2026, 10, 19, 14, 0, 0, 0, time.Local)
+	base := time.Date(2026, 10, 19, 14, 0, 0, 0, cnZone())
 	s.ApplyPoll([]Account{{UID: "a", Group: "qwenwork", Credits: 1000}}, base)
 
 	s.ApplyExpiry("a", []ExpireItem{
@@ -382,7 +387,7 @@ func TestExpireBucketsByInstant(t *testing.T) {
 // 旧实现按日期升序，同一天内的包看不出谁先没（今晚 00:00 vs 今晚 23:59）。
 func TestExpiryRowsHoursLeft(t *testing.T) {
 	s := newTestStats(t)
-	base := time.Date(2026, 10, 19, 14, 0, 0, 0, time.Local)
+	base := time.Date(2026, 10, 19, 14, 0, 0, 0, cnZone())
 	s.ApplyPoll([]Account{
 		{UID: "late", Group: "qwenwork", Credits: 100},
 		{UID: "soon", Group: "qwenwork", Credits: 100},
@@ -431,7 +436,7 @@ func TestExpiryRowsHoursLeft(t *testing.T) {
 // 新判据：forecast<0 视为「预计作废 = 全部额度」⇒ 照样预警。
 func TestExpiryRiskWhenNoBurn(t *testing.T) {
 	s := newTestStats(t)
-	base := time.Date(2026, 10, 19, 20, 0, 0, 0, time.Local)
+	base := time.Date(2026, 10, 19, 20, 0, 0, 0, cnZone())
 	s.ApplyPoll([]Account{
 		{UID: "idle", Group: "qwenwork", Credits: 100}, // 今天没花过 → forecast=-1
 		{UID: "burn", Group: "qwenwork", Credits: 100}, // 花过一点 → forecast>=0
@@ -473,7 +478,7 @@ func TestExpiryRiskWhenNoBurn(t *testing.T) {
 // 不能只有日期（否则秒级信息在源头就丢了，前端补不回来）。
 func TestExpiryRowsFullInstant(t *testing.T) {
 	s := newTestStats(t)
-	base := time.Date(2026, 10, 19, 14, 0, 0, 0, time.Local)
+	base := time.Date(2026, 10, 19, 14, 0, 0, 0, cnZone())
 	s.ApplyPoll([]Account{{UID: "a", Group: "qwenwork", Credits: 100}}, base)
 	s.ApplyExpiry("a", []ExpireItem{{At: "2026-10-20T00:00:03+08:00", Amount: 50}})
 	rows := s.Snapshot(base).Expiry
@@ -493,7 +498,7 @@ func TestExpiryRowsFullInstant(t *testing.T) {
 // 用户定义：**今天到期标红、明天到期标黄、更远不上色**。
 func TestExpiryUrgency(t *testing.T) {
 	s := newTestStats(t)
-	base := time.Date(2026, 10, 19, 14, 0, 0, 0, time.Local)
+	base := time.Date(2026, 10, 19, 14, 0, 0, 0, cnZone())
 	s.ApplyPoll([]Account{
 		{UID: "today", Group: "qwenwork", Credits: 100},
 		{UID: "tomorrow", Group: "traework", Credits: 100},
