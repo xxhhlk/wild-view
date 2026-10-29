@@ -8,10 +8,12 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 
 	"fmt"
 	"net/http"
@@ -33,6 +35,22 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 
 var serverPubKey *rsa.PublicKey
 
+// init 解析硬编码公钥。缺了它 serverPubKey 恒为 nil，
+// rsa.EncryptPKCS1v15 会直接空指针 panic。
+func init() {
+	block, _ := pem.Decode([]byte(serverPubKeyPEM))
+	if block == nil {
+		return
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return
+	}
+	if rsaPub, ok := pub.(*rsa.PublicKey); ok {
+		serverPubKey = rsaPub
+	}
+}
+
 // CosySession 每账号的签名状态。
 type CosySession struct {
 	MachineID    string
@@ -49,6 +67,9 @@ type CosySession struct {
 func NewCosySession(machineID, machineToken, machineType, nickname, uid, dt, drt string) (*CosySession, error) {
 	if machineID == "" || machineToken == "" || machineType == "" {
 		return nil, fmt.Errorf("missing machine fingerprint (need MachineID/Token/Type)")
+	}
+	if serverPubKey == nil {
+		return nil, fmt.Errorf("cosy: server public key not initialised")
 	}
 	tempKey := []byte(hexShort(16)) // 16 ASCII chars, AES-128 key
 	wrapped, err := rsa.EncryptPKCS1v15(rand.Reader, serverPubKey, tempKey)
