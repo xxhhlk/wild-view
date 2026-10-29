@@ -87,13 +87,14 @@ const window = { addEventListener: () => {}, location: { search: "" } };
 // 源码改写：注入 state + 导出函数
 const patched =
   raw.replace(/let state = null;/, "let state = " + JSON.stringify(FAKE_STATE) + ";") +
-  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, setState: (s) => { state = s; } };";
+  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, refreshFees, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, setState: (s) => { state = s; } };";
 
 // fetch 记录桩：checkin_times 变更要能断言「没点确定就不发请求」。
 // POST /api/config/checkin_times 会「落库」，后续 /api/state 必须回新值——
 // 不模拟这一步，app.js 的重复添加保护就会因读到旧 state 而漏检。
 const fetchLog = [];
 let storedTimes = FAKE_STATE.checkin_times.slice();
+let fetchImpl = null;
 const fetchStub = async (path, opts) => {
   fetchLog.push({ path, body: opts && opts.body });
   if (path === "/api/state") {
@@ -106,14 +107,17 @@ const fetchStub = async (path, opts) => {
   }
   return { ok: true, json: async () => ({ ok: true }) };
 };
+fetchImpl = fetchStub;
 
-new Function("document", "window", "localStorage", "fetch", "location", "navigator", patched)(
+new Function("document", "window", "localStorage", "fetch", "location", "navigator", "setTimeout", "globalThis", patched)(
   document,
   window,
   { getItem: () => null, setItem: () => {} },
-  fetchStub,
+  (...args) => fetchImpl(...args),
   window.location,
-  { userAgent: "node" }
+  { userAgent: "node" },
+  (fn) => { fn(); return 0; },
+  globalThis
 );
 
 const T = globalThis.__T;
@@ -133,6 +137,32 @@ check("费率表渲染多模型", feeHTML.includes("two") && feeHTML.includes("t
 check("模型提示安全转义", feeHTML.includes("one&quot;&lt;") && !feeHTML.includes('one"<'));
 T.renderFees({ channels: [{ channel: "traework", models: [{ model: "single", priced: false }] }] });
 check("费率表渲染单模型", document.getElementById("feesBox").innerHTML.includes("single"));
+
+// 手动刷新必须等待后台任务号完成，不能 POST 后立即读取旧缓存。
+fetchLog.length = 0;
+let feesTask = 0;
+let feesDone = 0;
+let feesRunning = false;
+fetchImpl = async (path, opts) => {
+  const method = opts?.method || "GET";
+  fetchLog.push({ path, method });
+  if (path === "/api/fees/refresh") {
+    feesTask++; feesRunning = true;
+    return { ok: true, json: async () => ({ ok: true, task_id: feesTask }) };
+  }
+  if (path === "/api/fees") {
+    if (feesRunning && feesTask > feesDone) feesDone = feesTask;
+    feesRunning = false;
+    return { ok: true, json: async () => ({ channels: [], refresh_running: feesRunning, refresh_done: feesDone }) };
+  }
+  return fetchStub(path, opts);
+};
+await T.refreshFees();
+const feePosts = fetchLog.filter((f) => f.path === "/api/fees/refresh").length;
+const feeGets = fetchLog.filter((f) => f.path === "/api/fees" && f.method === "GET").length;
+check("手动刷新只提交一个后台任务", feePosts === 1, `实际 ${feePosts} 次`);
+check("手动刷新会等待任务完成再读取", feeGets >= 1 && document.getElementById("btnRefreshFees").disabled === false);
+fetchImpl = fetchStub;
 
 // ---- 场景 1：账号卡片渲染（查看器不再展示路由冷却/停用状态） ----
 T.renderAccounts();

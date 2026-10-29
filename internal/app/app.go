@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -156,7 +157,18 @@ type App struct {
 	pricingCache   []provider.ModelPricing // 旧版渠道级缓存，仅用于兼容读取
 	pricingFetched time.Time
 	pricingErr     string // 最近一次拉取错误
-	pricingBusy    bool   // 防并发刷新（启动刷新与面板触发可能重叠）
+	pricingBusy    bool   // 是否有刷新任务在跑（含排队后的续跑）
+
+	// 刷新任务号：让前端能确认「自己这次点击」真的跑完，而不是读到旧缓存就当新数据。
+	pricingSeq  uint64 // 最近分配的任务号
+	pricingDone uint64 // 最近完成的任务号
+	// 排队槽位只留一个：自动刷新进行中时，手动强制刷新不再被单飞锁静默丢弃，
+	// 而是合并成紧随其后的一轮（多次点击无需各跑一遍）。
+	pricingPending      uint64
+	pricingPendingForce bool
+
+	// refreshFn 执行一轮抓取；测试注入用，生产为 catalogRefreshOnce。
+	refreshFn func(force bool)
 }
 
 // New 构建 App 并接管全局日志（写文件 + 环形缓冲）。
@@ -1237,10 +1249,8 @@ func (a *App) completeLogin(r login.Result) {
 func (a *App) afterAccountAdded(kind provider.Kind) {
 	// 立即强制刷新目录与倍率（后台执行，不阻塞登录流程）。
 	// 按账号作用域刷新，不需要清空其它渠道的缓存。
-	a.safeGo(func() {
-		a.RefreshPricing()
-		log.Printf("account added platform=%s: models+pricing refreshed", kind)
-	})
+	a.RequestCatalogRefresh(true)
+	log.Printf("account added platform=%s: models+pricing refresh queued", kind)
 }
 
 // completeWbaiLogin 国际版登录成功：写 auth 文件、重载账号池、异步拉取初始积分。
@@ -2119,9 +2129,9 @@ func (a *App) StartPricingAutoRefresh(ctx context.Context, interval time.Duratio
 	a.bgRefresh.Add(1)
 	go func() {
 		defer a.bgRefresh.Done()
-		// 启动即补拉一次：目录与倍率都在 RefreshCatalog 内按 TTL 判断，
+		// 启动即补拉一次：目录与倍率都在刷新内按 TTL 判断，
 		// 新鲜缓存不会重复打上游。之后每 interval 检查一次过期项。
-		a.RefreshCatalog(false)
+		a.RequestCatalogRefresh(false)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -2129,7 +2139,7 @@ func (a *App) StartPricingAutoRefresh(ctx context.Context, interval time.Duratio
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				a.RefreshCatalog(false)
+				a.RequestCatalogRefresh(false)
 			}
 		}
 	}()
@@ -3218,8 +3228,8 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, a.FeesInfo())
 	})
 	mux.HandleFunc("POST /api/fees/refresh", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, a.FeesInfo())
-		go a.safeGo(func() { a.RefreshPricing() })
+		task := a.RequestCatalogRefresh(true)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "task_id": task})
 	})
 	// 余额变化曲线：真实余额采样（不是积分流水差分）。
 	mux.HandleFunc("GET /api/balance", func(w http.ResponseWriter, r *http.Request) {
@@ -3544,7 +3554,7 @@ func (a *App) FeesInfo() map[string]any {
 	}
 	if needRefresh {
 		// 非强制刷新：只补拉过期/从未成功的项，新鲜数据不会重复打上游。
-		a.safeGo(func() { a.RefreshCatalog(false) })
+		a.RequestCatalogRefresh(false)
 	}
 
 	order := feeChannelOrderWithDynamic(modelsByKind)
@@ -3555,11 +3565,14 @@ func (a *App) FeesInfo() map[string]any {
 	errMsg := a.pricingErr
 	a.pricingMu.Unlock()
 
+	running, done := a.CatalogRefreshState()
 	result := map[string]any{
-		"note":       "按账号分别查询；倍率为空表示上游未返回定价（未知），不代表免费。",
-		"channels":   channels,
-		"disclaimer": "本工具仅展示各渠道返回的额度与倍率，不参与定价；以各上游官方页面为准。",
-		"accounts":   len(scopes),
+		"refresh_running": running,
+		"refresh_done":    done,
+		"note":            "按账号分别查询；倍率为空表示上游未返回定价（未知），不代表免费。",
+		"channels":        channels,
+		"disclaimer":      "本工具仅展示各渠道返回的额度与倍率，不参与定价；以各上游官方页面为准。",
+		"accounts":        len(scopes),
 	}
 	if newest > 0 {
 		result["cached_at"] = time.Unix(newest, 0).Format("01-02 15:04")
@@ -3663,26 +3676,67 @@ func capSourceOf(mi provider.ModelInfo) string {
 	return ""
 }
 
-// RefreshPricing 手动刷新入口：强制重新拉取全部账号的目录与倍率。
-func (a *App) RefreshPricing() { a.RefreshCatalog(true) }
-
-// RefreshCatalog 按账号刷新模型目录与倍率，写入账号作用域缓存。
-// force=true 忽略新鲜期（面板手动刷新）；false 时仅补拉过期/从未成功的项。
-// 不使用 Pool.Pick：查询结果不应受路由冷却、惩罚或粘性选号影响。
-func (a *App) RefreshCatalog(force bool) {
+// RequestCatalogRefresh 登记一轮「模型目录 + 倍率」刷新，返回任务号。
+//
+// force=true 忽略 TTL（面板手动刷新、新账号就绪）；false 只补拉过期/从未成功项。
+// 已有任务在跑时，本次请求进排队槽位并在当前轮结束后立即执行 —— 旧实现是单飞锁
+// 直接 return，表现为「自动刷新期间点刷新没反应」，且前端无从分辨成功与丢弃。
+func (a *App) RequestCatalogRefresh(force bool) uint64 {
 	a.pricingMu.Lock()
+	a.pricingSeq++
+	id := a.pricingSeq
 	if a.pricingBusy {
+		a.pricingPending, a.pricingPendingForce = id, force
 		a.pricingMu.Unlock()
-		return
+		return id
 	}
 	a.pricingBusy = true
 	a.pricingMu.Unlock()
-	defer func() {
+	go a.catalogRefreshLoop(id, force)
+	return id
+}
+
+// catalogRefreshLoop 跑完一轮后检查排队槽位；无排队才释放 busy，保证任务号单调完成。
+func (a *App) catalogRefreshLoop(id uint64, force bool) {
+	fn := a.refreshFn
+	if fn == nil {
+		fn = a.catalogRefreshOnce
+	}
+	for {
+		func() {
+			defer func() {
+				// 单轮 panic 不能把 busy 永久钉住，否则前端只能等超时。
+				if r := recover(); r != nil {
+					log.Printf("catalog refresh panic task=%d err=%v stack=%s", id, r, debug.Stack())
+				}
+			}()
+			fn(force)
+		}()
 		a.pricingMu.Lock()
+		a.pricingDone = id
+		if a.pricingPending != 0 {
+			id, force = a.pricingPending, a.pricingPendingForce
+			a.pricingPending, a.pricingPendingForce = 0, false
+			a.pricingMu.Unlock()
+			continue
+		}
 		a.pricingBusy = false
 		a.pricingMu.Unlock()
-	}()
+		return
+	}
+}
 
+// CatalogRefreshState 返回刷新队列状态，供 /api/fees 下发给前端判断「本轮是否真的跑完」。
+func (a *App) CatalogRefreshState() (running bool, done uint64) {
+	a.pricingMu.Lock()
+	defer a.pricingMu.Unlock()
+	return a.pricingBusy, a.pricingDone
+}
+
+// catalogRefreshOnce 按账号刷新模型目录与倍率，写入账号作用域缓存。
+// force=true 忽略新鲜期；false 时仅补拉过期/从未成功的项。
+// 不使用 Pool.Pick：查询结果不应受路由冷却、惩罚或粘性选号影响。
+func (a *App) catalogRefreshOnce(force bool) {
 	type job struct {
 		rt       *Runtime
 		uid      string

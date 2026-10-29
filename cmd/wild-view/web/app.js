@@ -108,20 +108,49 @@ async function loadFees() {
     const fees = await api("/api/fees");
     lastFees = fees; // 供模型查找面板取全渠道模型（纯前端，不改后端）
     renderFees(fees);
+    // 启动/自动刷新正在跑时接上同一轮询，避免面板停在旧数据上却显示成最终结果。
+    if (fees.refresh_running) waitFeesRefresh(0);
   } catch (e) { /* 费率接口失败不阻塞 */ }
 }
 
-async function refreshFees() {
-  $("btnRefreshFees").disabled = true;
+// waitFeesRefresh 等到「任务号 ≥ minTask 的那一轮」真正跑完再渲染。
+// minTask=0 表示只接当前运行中的任务（页面加载场景）。上限 120 秒：
+// 超时不谎报成功，提示后再点一次即可（后台任务仍在继续）。
+async function waitFeesRefresh(minTask) {
+  const btn = $("btnRefreshFees");
+  btn.disabled = true;
+  btn.textContent = "刷新中…";
+  const deadline = Date.now() + 120000;
   try {
-    await api("/api/fees/refresh", {});
-    const fees = await api("/api/fees");
-    lastFees = fees;
-    renderFees(fees);
-    toast("已请求刷新，显示的数据可能尚未更新");
-  } catch (e) { toast(e.message); } finally {
-    $("btnRefreshFees").disabled = false;
+    for (;;) {
+      await new Promise((res) => setTimeout(res, 1000));
+      const fees = await api("/api/fees");
+      lastFees = fees;
+      if (!fees.refresh_running && fees.refresh_done >= minTask) {
+        renderFees(fees);
+        return fees;
+      }
+      if (Date.now() > deadline) {
+        renderFees(fees);
+        toast("刷新仍在后台进行，稍后再点一次即可看到最新结果");
+        return fees;
+      }
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "刷新";
   }
+}
+
+async function refreshFees() {
+  if ($("btnRefreshFees").disabled) return;
+  try {
+    const r = await api("/api/fees/refresh", {});
+    const fees = await waitFeesRefresh(r.task_id || 0);
+    if (fees && !fees.refresh_running && fees.refresh_done >= (r.task_id || 0)) {
+      toast(fees.error ? "刷新完成，部分渠道失败" : "模型列表和费率已刷新");
+    }
+  } catch (e) { toast(e.message); }
 }
 
 // ---------- 模型查找（纯前端：从最近一次 /api/fees 结果里按关键字过滤） ----------
