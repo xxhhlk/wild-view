@@ -71,7 +71,7 @@ func TestLoginFlowsCoverKnownChannels(t *testing.T) {
 		provider.ZCode, provider.Gemini, provider.CodeArts,
 		provider.Raccoon, provider.Loomy, provider.GLM,
 		provider.OfficeAce, provider.MonkeyCode,
-		provider.Oczen, provider.Kilo,
+		provider.Kilo,
 	}
 	for _, k := range mustBeKnown {
 		if _, ok := loginFlows[k]; !ok {

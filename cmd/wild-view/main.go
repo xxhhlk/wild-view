@@ -31,7 +31,6 @@ import (
 
 	"wild-view/internal/app"
 	"wild-view/internal/auth"
-	"wild-view/internal/cline"
 	"wild-view/internal/codearts"
 	"wild-view/internal/config"
 	"wild-view/internal/gemini"
@@ -42,7 +41,6 @@ import (
 	"wild-view/internal/loomy"
 	"wild-view/internal/minimax"
 	"wild-view/internal/monkeycode"
-	"wild-view/internal/oczen"
 	"wild-view/internal/officeace"
 	"wild-view/internal/platform"
 	"wild-view/internal/pool"
@@ -198,20 +196,11 @@ func main() {
 	if err != nil {
 		fatal("读取智谱清言账号目录失败：%v", err)
 	}
-	// Cline：粘贴型渠道，凭据是官方 API Key（sk_…），由面板「粘贴 API Key」写入 auths/。
-	// 一个 Cline 账号一把 Key；Key 不轮换 ⇒ 无 refresh、无保活、无签到。
-	clAuths, err := auth.LoadClineDir(cfg.AuthDir)
-	if err != nil {
-		fatal("读取 Cline 账号目录失败：%v", err)
-	}
 	// OfficeAce：导入型渠道，凭据由面板从本机 OfficeAce 客户端文件发现或自助 OAuth 登录写入 auths/。
 	oaAuths, err := auth.LoadOfficeAceDir(cfg.AuthDir)
 	if err != nil {
 		fatal("读取 OfficeAce 账号目录失败：%v", err)
 	}
-	// OpenCodeZen 匿名通道无凭证文件：全程只有一个虚拟账号，
-	// 不经目录扫描、不参与 reload（见 app.reloadAccounts 的说明）。
-	ocAuths := []*auth.Auth{oczen.AnonymousAuth()}
 	// Kilo 免费池同样是免密渠道：没有凭证文件、没有登录流程，只有一个虚拟账号。
 	kiAuths := []*auth.Auth{kilo.AnonymousAuth()}
 	// MiniMax Code：正常多账号渠道，凭据由设备码登录写入 auths/minimax-*.json。
@@ -240,8 +229,8 @@ func main() {
 	if err != nil {
 		fatal("读取 CodeArts 账号目录失败：%v", err)
 	}
-	log.Printf("loaded accounts: workbuddy=%d %s, traework=%d, qoder=%d, qodercn=%d, qodercom=%d, workbuddyai=%d, qwenwork=%d, glm=%d, monkeycode=%d, raccoon=%d, loomy=%d, cline=%d, officeace=%d, oczen=%d(匿名), kilo=%d(匿名), minimax=%d, lobsterai=%d, zcode=%d, gemini=%d, codearts=%d from %s",
-		len(wbAuths), cfg.Region, len(trAuths), len(qdAuths), len(qcnAuths), len(qcmAuths), len(wbaAuths), len(qwAuths), len(glmAuths), len(mcAuths), len(rcAuths), len(lmAuths), len(clAuths), len(oaAuths), len(ocAuths), len(kiAuths), len(mimAuths), len(lobAuths), len(zcdAuths), len(gemAuths), len(caAuths), cfg.AuthDir)
+	log.Printf("loaded accounts: workbuddy=%d %s, traework=%d, qoder=%d, qodercn=%d, qodercom=%d, workbuddyai=%d, qwenwork=%d, glm=%d, monkeycode=%d, raccoon=%d, loomy=%d, officeace=%d, kilo=%d(匿名), minimax=%d, lobsterai=%d, zcode=%d, gemini=%d, codearts=%d from %s",
+		len(wbAuths), cfg.Region, len(trAuths), len(qdAuths), len(qcnAuths), len(qcmAuths), len(wbaAuths), len(qwAuths), len(glmAuths), len(mcAuths), len(rcAuths), len(lmAuths), len(oaAuths), len(kiAuths), len(mimAuths), len(lobAuths), len(zcdAuths), len(gemAuths), len(caAuths), cfg.AuthDir)
 
 	wbPool := pool.New(filepath.Join(stateDir, "state-workbuddy.json"))
 	for _, a := range wbAuths {
@@ -293,27 +282,12 @@ func main() {
 	for _, a := range glmAuths {
 		glmPool.Add(a)
 	}
-	// Cline：真多账号池（一把 Key = 一个 Cline 账号），故**不置 SingleAccount**，
-	// 账号级惩罚与同请求换号（R29）全量适用。
-	clPool := pool.New(filepath.Join(stateDir, "state-cline.json"))
-	for _, a := range clAuths {
-		clPool.Add(a)
-	}
 	// OfficeAce：真多账号池（每个华为账号一份凭据），不置 SingleAccount。
 	oaPool := pool.New(filepath.Join(stateDir, "state-officeace.json"))
 	for _, a := range oaAuths {
 		oaPool.Add(a)
 	}
-	// oczen：整池只有一个匿名虚拟账号，state 仅用于记冷却（无积分、无签到）
-	ocPool := pool.New(filepath.Join(stateDir, "state-oczen.json"))
-	for _, a := range ocAuths {
-		ocPool.Add(a)
-	}
-	// 安全网：匿名账号不允许被禁用或被冷却（任何历史 state 或异常路径写脏都可自愈）。
-	// 冷却也要清：该渠道只有这一个账号且无号可轮换，冷却即等于整条渠道下线。
-	ocPool.SetDisabled(oczen.AnonymousUID, false)
-	ocPool.ClearPenalty(oczen.AnonymousUID)
-	// kilo：与 oczen 同款——整池只有一个虚拟账号，state 仅用于记冷却（无积分、无签到）。
+	// kilo：整池只有一个虚拟账号，state 仅用于记冷却（无积分、无签到）。
 	// 同样要在启动时自愈：任何历史脏数据（冷却/禁用）都会让这条没有第二个账号的渠道直接下线。
 	kiPool := pool.New(filepath.Join(stateDir, "state-kilo.json"))
 	for _, a := range kiAuths {
@@ -371,12 +345,8 @@ func main() {
 	lmUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	mcUp := monkeycode.New()
 	mcUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	clUp := cline.New()
-	clUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	oaUp := officeace.New()
 	oaUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	ocUp := oczen.New()
-	ocUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	kiUp := kilo.New()
 	kiUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	mimUp := minimax.New()
@@ -468,19 +438,10 @@ func main() {
 	// 保活没有可刷的东西（refreshToken 为空，调度器会跳过并只记一条日志）。
 	lmSch := scheduler.New(scheduler.Config{Pool: lmPool, Upstream: lmUp, Name: "loomy",
 		CheckinMinutes: checkinMinutes, KeepaliveHours: []int{}, Ledger: lg})
-	// Cline：官方 API Key **不过期**、无签到活动、无 refresh token ⇒ 定时任务全部关闭。
-	// 必须传显式空切片 []int{}（R39）：传 nil 会被 scheduler.New 的零值兜底补上默认时间，
-	// 于是每天空跑一次必然失败的签到，并在面板渲染红色「签到失败」。
-	clSch := scheduler.New(scheduler.Config{Pool: clPool, Upstream: clUp, Name: "cline",
-		CheckinMinutes: []int{}, KeepaliveHours: []int{}, Ledger: lg})
 	// OfficeAce：有每日签到（bonus/claim）但要先有临时凭据（V11 签名），保活用于续期。
 	// CheckinMinutes 用全局签到时间；KeepaliveHours 用配置保活时段（临时凭据约 2h 到期）。
 	oaSch := scheduler.New(scheduler.Config{Pool: oaPool, Upstream: oaUp, Name: "officeace",
 		CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
-	// OpenCodeZen 匿名：无账号、无签到、无 token 可保活（凭证是常量 public）。
-	// CheckinMinutes/KeepaliveHours 均为显式空切片 → 调度器不发生任何上游调用。
-	ocSch := scheduler.New(scheduler.Config{Pool: ocPool, Upstream: ocUp, Name: "oczen",
-		CheckinMinutes: []int{}, KeepaliveHours: []int{}})
 	// Kilo 免费池：无账号、无签到、无 token 可保活 ⇒ 定时任务全关。
 	// 必须传**显式空切片**（R39）：传 nil 会被 scheduler.New 当作「未配置」补成
 	// 默认 9:00/21:00 签到与 22:00 保活，每天空跑两次必然失败的调用。
@@ -533,9 +494,7 @@ func main() {
 		provider.Raccoon:    {Kind: provider.Raccoon, Pool: rcPool, Upstream: rcUp, Scheduler: rcSch, StaticModels: raccoon.StaticModels()},
 		provider.Loomy:      {Kind: provider.Loomy, Pool: lmPool, Upstream: lmUp, Scheduler: lmSch, StaticModels: loomy.StaticModels()},
 		provider.GLM:        {Kind: provider.GLM, Pool: glmPool, Upstream: glmUp, Scheduler: glmSch, StaticModels: glm.StaticModels()},
-		provider.Cline:      {Kind: provider.Cline, Pool: clPool, Upstream: clUp, Scheduler: clSch, StaticModels: cline.StaticModels()},
 		provider.OfficeAce:  {Kind: provider.OfficeAce, Pool: oaPool, Upstream: oaUp, Scheduler: oaSch, StaticModels: officeace.StaticModels()},
-		provider.Oczen:      {Kind: provider.Oczen, Pool: ocPool, Upstream: ocUp, Scheduler: ocSch, StaticModels: oczen.StaticModels()},
 		provider.Kilo:       {Kind: provider.Kilo, Pool: kiPool, Upstream: kiUp, Scheduler: kiSch, StaticModels: kilo.StaticModels()},
 		provider.Minimax:    {Kind: provider.Minimax, Pool: mimPool, Upstream: mimUp, Scheduler: mimSch, StaticModels: minimax.StaticModels()},
 		provider.LobsterAI:  {Kind: provider.LobsterAI, Pool: lobPool, Upstream: lobUp, Scheduler: lobSch, StaticModels: lobsterai.StaticModels()},
@@ -586,8 +545,6 @@ func main() {
 	mux.HandleFunc("/status", notFound)
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	appInst.HandleAPI(mux)
-	// 面板保存 oczen key 后热更新渠道凭证；启动时也应用一次配置中的初始 key
-	ocUp.SetAPIKey(cfg.OczenAPIKey)
 	appInst.SetRootHandler(mux)
 	log.Printf("wild-view revision=%s 数据目录=%s", buildRevision(), wd)
 
@@ -616,14 +573,10 @@ func main() {
 	go rcSch.Run(sctx)
 	go lmSch.Run(sctx)
 	go mcSch.Run(sctx)
-	go ocSch.Run(sctx)
 	// ⚠️ 新增渠道时必须在这里补 Run()。
 	// 漏了**不会报错**——只表现为「该渠道的自动签到/保活从不运行」，
 	// 而手工触发（面板按钮 / RunCheckinNow）仍然可用，极难发现。
 	go glmSch.Run(sctx)
-	// Cline 的 Run 同样不可漏（R34：漏了不报错，只表现为该渠道定时逻辑从不运行）。
-	// 本渠道任务全关，Run 只会阻塞等 ctx/配置变更，但缺了它将来加任务即静默失效。
-	go clSch.Run(sctx)
 	// OfficeAce 的 Run 不可漏（R34）：本渠道有签到与保活。
 	go oaSch.Run(sctx)
 	// kilo 的 Run 同样不可漏（R34）：本渠道当前无任何定时任务，Run 只会阻塞等
@@ -645,8 +598,6 @@ func main() {
 	// - traework / workbuddy(CN) 虽有签到顺带拉余额，但一天只有两次，
 	//   其间 token 若在别处被轮换（401）也无法自愈；统一纳入循环才能
 	//   启动即出真实拆分数字，并靠 401 自愈（refreshIfSessionDead）及时恢复。
-	// oczen 与 kilo 不在其中：两条都是免密渠道（无账号、无积分可刷，面板显示「不适用」），
-	// 其 FetchModelPricing 已在费率刷新路径单独覆盖。
 	// glm 纳入：其凭据本体是 refresh_token（accessToken 可为空），
 	// 积分靠 member_info 拉取，不刷就永远是 0。
 	appInst.StartCreditAutoRefresh(sctx, []provider.Kind{
@@ -680,7 +631,7 @@ func main() {
 		if appInst.PanelAuthEnabled() {
 			fmt.Printf("  Panel auth:    admin_password enabled (cookie session, 7d)\n")
 		}
-		fmt.Printf("  Accounts:      workbuddy=%d traework=%d qoder=%d oczen=%d(匿名) kilo=%d(匿名) minimax=%d lobsterai=%d zcode=%d gemini=%d codearts=%d\n", len(wbAuths), len(trAuths), len(qdAuths), len(ocAuths), len(kiAuths), len(mimAuths), len(lobAuths), len(zcdAuths), len(gemAuths), len(caAuths))
+		fmt.Printf("  Accounts:      workbuddy=%d traework=%d qoder=%d kilo=%d(匿名) minimax=%d lobsterai=%d zcode=%d gemini=%d codearts=%d\n", len(wbAuths), len(trAuths), len(qdAuths), len(kiAuths), len(mimAuths), len(lobAuths), len(zcdAuths), len(gemAuths), len(caAuths))
 		fmt.Printf("\nPress Ctrl+C to exit\n")
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

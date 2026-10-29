@@ -476,17 +476,8 @@ func LoadLoomyDir(dir string) ([]*Auth, error) {
 	return loadPrefixed(dir, "loomy")
 }
 
-// LoadClineDir 扫描 Cline 凭证（cline-*.json）。
-//
-// 凭据不来自登录编排，而是面板「粘贴官方 API Key」（见 app.SubmitClineKey）。
-// glob 边界已核：现存前缀 workbuddy* / workbuddyai- / trae- / qoder* / qodercn- /
-// qodercom- / qwenwork- / glm- / monkeycode- / raccoon- / loomy- 与 cline- 无包含关系。
-func LoadClineDir(dir string) ([]*Auth, error) {
-	return loadPrefixed(dir, "cline")
-}
-
 // LoadOfficeAceDir 扫描华为云果办 OfficeAce 渠道凭证（officeace-*.json）。
-// 与 cline 同为「导入型」渠道：凭据由面板从本机 OfficeAce 客户端文件发现后生成
+// 属「导入型」渠道：凭据由面板从本机 OfficeAce 客户端文件发现后生成
 // （见 internal/officeace 的发现逻辑），或自助 OAuth 登录生成。
 // 上游模型网关是 OpenAI 兼容的华为 AgentArts 网关，故 accessToken 承载网关 Authorization 头
 // （Basic base64(AK:SK)）；其余扩展字段（base_url / 临时 AK-SK / refresh_token / DPoP 私钥）

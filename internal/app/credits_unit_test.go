@@ -33,8 +33,8 @@ func TestCreditsUnitTokenChannels(t *testing.T) {
 		}
 	}
 
-	// 匿名渠道保持「不适用」语义（token 单位不应该把它们也拉进 Token 面板）。
-	for _, k := range []provider.Kind{provider.Oczen, provider.Kilo} {
+	// 免密免费池保持「不适用」语义（token 单位不应该把它也拉进 Token 面板）。
+	for _, k := range []provider.Kind{provider.Kilo} {
 		if !a.creditsNAKind(k.String()) {
 			t.Errorf("%s 应保持 credits_na（无额度概念）", k)
 		}

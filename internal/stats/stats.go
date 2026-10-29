@@ -697,14 +697,14 @@ var (
 		string(provider.Qoder): true, string(provider.QoderCN): true, string(provider.QoderCOM): true,
 		string(provider.QwenWork): true, string(provider.MonkeyCode): true,
 		string(provider.Raccoon): true, string(provider.Loomy): true,
-		string(provider.Oczen): true, string(provider.GLM): true,
+		string(provider.GLM): true,
+		"cline":              true, "oczen": true, // 保留历史统计的渠道归属，不注册上游渠道。
 		string(provider.Kilo):      true, // 漏了它 ⇒ kilo 的 token 与请求都不进平台概览表
 		string(provider.Minimax):   true,
 		string(provider.LobsterAI): true,
 		string(provider.ZCode):     true,
 		string(provider.Gemini):    true,
 		string(provider.CodeArts):  true,
-		string(provider.Cline):     true, // R59：cline 的模型名是 cline-free/*，漏了它则该渠道 token 不进平台表
 		string(provider.OfficeAce): true,
 	}
 )
@@ -743,11 +743,10 @@ func normalizePlatform(g string) string {
 	return g
 }
 
-// noExpiryChannel 判定渠道是否无临期/到期概念（oczen 匿名通道与 kilo 免费池：
-// 两者都不存在账号/余额概念，resource_detail 无数据可返，临期数据喂入方须跳过，
-// 否则每轮恒报失败噪音）。
+// noExpiryChannel 判定渠道是否无临期/到期概念（kilo 免费池：不存在账号/余额概念，
+// resource_detail 无数据可返，临期数据喂入方须跳过，否则每轮恒报失败噪音）。
 func noExpiryChannel(g string) bool {
-	return g == string(provider.Oczen) || g == string(provider.Kilo)
+	return g == string(provider.Kilo) || g == "oczen" // 兼容旧统计数据
 }
 
 // platformRowsLocked 生成平台表行（调用方须持锁）：按 group 聚合账号数/余额/今日

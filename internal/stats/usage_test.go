@@ -268,8 +268,6 @@ func TestChannelOfModel(t *testing.T) {
 	}{
 		{"workbuddy/deepseek-v4.1-flash", "workbuddy", true},
 		{"traecode/glm-5.3", "traecode", true},
-		// 上游命名空间直通（R59）：`cline-free/*` 归到 cline，否则该渠道 token 会漏统计；
-		// 旧双层写法同样归到 cline（两种写法必须落同一行）
 		{"cline-free/mimo-v2.6-flash", "cline", true},
 		{"cline/cline-free/mimo-v2.6-flash", "cline", true},
 		{"deepseek-v4.1-flash", "", false}, // 裸名（compat 映射，本地看不到渠道）

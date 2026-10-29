@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"wild-view/internal/auth"
-	"wild-view/internal/cline"
 	"wild-view/internal/config"
 	"wild-view/internal/ledger"
 	"wild-view/internal/login"
@@ -290,9 +289,8 @@ func (a *App) runtimesSnapshot() []*Runtime {
 }
 
 func (a *App) firstRuntime() *Runtime {
-	// oczen 排在末位：它无调度器活动，不应成为「签到时间/下次签到」的展示来源。
-	// 顺序即展示优先级：新渠道追加在 Oczen 之前（Oczen 恒末位）。
-	for _, k := range []provider.Kind{provider.WorkBuddy, provider.WorkBuddyAI, provider.TraeWork, provider.Qoder, provider.QoderCN, provider.QoderCOM, provider.QwenWork, provider.GLM, provider.Raccoon, provider.Loomy, provider.MonkeyCode, provider.Minimax, provider.LobsterAI, provider.ZCode, provider.Gemini, provider.CodeArts, provider.Kilo, provider.Oczen} {
+	// 顺序即展示优先级：无调度器活动的免密渠道（Kilo）排末位。
+	for _, k := range []provider.Kind{provider.WorkBuddy, provider.WorkBuddyAI, provider.TraeWork, provider.Qoder, provider.QoderCN, provider.QoderCOM, provider.QwenWork, provider.GLM, provider.Raccoon, provider.Loomy, provider.MonkeyCode, provider.Minimax, provider.LobsterAI, provider.ZCode, provider.Gemini, provider.CodeArts, provider.Kilo} {
 		if rt := a.runtime(k); rt != nil {
 			return rt
 		}
@@ -354,25 +352,24 @@ func (a *App) allStatuses() []pool.Status {
 // channelOrder 渠道固定展示顺序（面板账号卡片/费率表/设置代理列表统一用此序）。
 // 旧 Qoder 已下线不列；未出现在表中的渠道排最后（按字母序）。
 var channelOrder = map[provider.Kind]int{
-	provider.Oczen: 0, provider.WorkBuddy: 1, provider.WorkBuddyAI: 2,
-	provider.QoderCN: 3, provider.QoderCOM: 4, provider.TraeWork: 5, provider.QwenWork: 6,
-	provider.GLM:       7,
-	provider.OfficeAce: 8,
-	provider.Kilo:      9, // 免密免费池：排序上紧随 oczen 之后（同属无账号渠道）
-	provider.Minimax:   10,
-	provider.LobsterAI: 11,
-	provider.ZCode:     12,
-	provider.Gemini:    13,
-	provider.CodeArts:  14,
+	provider.WorkBuddy: 0, provider.WorkBuddyAI: 1,
+	provider.QoderCN: 2, provider.QoderCOM: 3, provider.TraeWork: 4, provider.QwenWork: 5,
+	provider.GLM:       6,
+	provider.OfficeAce: 7,
+	provider.Kilo:      8, // 免密免费池：无账号渠道，排在最后
+	provider.Minimax:   9,
+	provider.LobsterAI: 10,
+	provider.ZCode:     11,
+	provider.Gemini:    12,
+	provider.CodeArts:  13,
 }
 
 // feeChannelOrder 「模型列表和费率」面板的渠道分组顺序。
-// 与 channelOrder 分开维护：本表把 Oczen 放首位（其免费模型最常被查），
-// kilo 紧随其后（同为免密免费池），且含 TraeCode（与 TraeWork 共账号但模型集不同，需独立成组）。
+// 与 channelOrder 分开维护：本表把 kilo 放首位（免密免费池），
+// 且含 TraeCode（与 TraeWork 共账号但模型集不同，需独立成组）。
 var feeChannelOrder = []provider.Kind{
-	provider.Oczen, provider.Kilo, provider.WorkBuddy, provider.WorkBuddyAI, provider.QoderCN,
+	provider.Kilo, provider.WorkBuddy, provider.WorkBuddyAI, provider.QoderCN,
 	provider.QoderCOM, provider.TraeWork, provider.TraeCode, provider.QwenWork, provider.GLM,
-	provider.Cline, // 漏在此表 = 面板永远不出该渠道 tab（buildFeesChannels 只遍历本表）
 	provider.MonkeyCode,
 	provider.Raccoon,
 	provider.Loomy,
@@ -408,11 +405,7 @@ func sortChannelsByOrder[T any](items []T, kindOf func(T) provider.Kind) {
 // 注意：**ZCode 不走这里**（尽管它的额度也不是积分）——它有真实的 token 桶要展示，
 // 走 creditsUnit="token" 的「Token 计数」面板，而不是「不适用」（见 creditsUnit）。
 func (a *App) creditsNAKind(group string) bool {
-	if group == provider.Oczen.String() || group == provider.Kilo.String() ||
-		group == provider.Cline.String() {
-		return true
-	}
-	return false
+	return group == provider.Kilo.String()
 }
 
 // creditsUnit 该渠道「额度」的计量单位：空串 = 积分（credits，默认），`"token"` = Token 计数。
@@ -433,7 +426,7 @@ func (a *App) creditsUnit(group string) string {
 func noExplicitCheckin(k provider.Kind) bool {
 	// GLM 的每日签到必须先发一轮最小对话（keepaliveChat），属于查看器明确移除的
 	// 聊天保活，故不提供手动/批量入口。
-	return k == provider.WorkBuddyAI || k == provider.GLM || k == provider.QwenWork || k == provider.Oczen || k == provider.Kilo || k == provider.ZCode || k == provider.Gemini || k == provider.Cline
+	return k == provider.WorkBuddyAI || k == provider.GLM || k == provider.QwenWork || k == provider.Kilo || k == provider.ZCode || k == provider.Gemini
 }
 
 func (a *App) noExplicitCheckinKind(k provider.Kind) bool {
@@ -768,9 +761,6 @@ func init() {
 	// —— 不通过本表发起的渠道（改造前 A 表的四种语义，现统一为说明文字）——
 	loginFlows[provider.MonkeyCode] = &loginFlow{
 		noFlowReason: "MonkeyCode 渠道无需登录：请在面板点「从本机客户端导入」（复用本机已登录的官方客户端凭据）",
-	}
-	loginFlows[provider.Oczen] = &loginFlow{
-		noFlowReason: "OpenCodeZen 为匿名通道，无需也无法添加账号",
 	}
 	loginFlows[provider.Kilo] = &loginFlow{
 		noFlowReason: "Kilo 免费池无需登录，也没有可添加的账号",
@@ -1528,71 +1518,6 @@ func (a *App) SubmitGLMToken(refreshToken string) (string, error) {
 	return r.UID, nil
 }
 
-// SubmitClineKey 提交用户粘贴的 Cline 官方 API Key（sk_…）：验证 → 落盘 → 重载账号池。
-//
-// 验证只调 GET /api/v1/api-keys —— **零 token 消耗**，避免「添加账号即烧额度」。
-// uid 取该端点中 key_prefix 与本 Key 相符那条的 apk- id（实测 key_prefix = Key 前 10 字符）。
-//
-// 第二个返回值是**告警**（非错误，账号照样保存）：官方配额字段名是 `…UsageCostUSDPerUser`，
-// 即上限按 Cline **账号**计 ⇒ 同一账号的多把 Key 共享一份额度。
-// 由于 api-keys 返回的是本账号**全部** Key，可据此发现「两把 Key 同属一个账号」并提醒
-// 用户去注册独立账号，而不是误以为多 Key 等于多额度。
-func (a *App) SubmitClineKey(apiKey string) (string, string, error) {
-	key := strings.TrimSpace(apiKey)
-	res, err := cline.ValidateKey(key)
-	if err != nil {
-		return "", "", err
-	}
-
-	// 同账号检测：新 Key 所在账号的 Key 列表 ∩ 已入库账号的 Key 前缀
-	warn := ""
-	if existing, lerr := auth.LoadClineDir(a.cfg.AuthDir); lerr == nil {
-		family := append([]string{res.KeyPrefix}, res.SiblingKeys...)
-		for _, e := range existing {
-			p := e.AccessTokenValue()
-			if len(p) > cline.KeyPrefixLen {
-				p = p[:cline.KeyPrefixLen]
-			}
-			if p == "" {
-				continue
-			}
-			for _, kp := range family {
-				if kp == p {
-					warn = fmt.Sprintf("这把 Key 与已添加的账号 %s 同属一个 Cline 账号，共享同一份额度"+
-						"（官方按账号计），不会增加可用额度。请注册独立 Cline 账号并各自建 Key。", e.UID)
-					break
-				}
-			}
-			if warn != "" {
-				break
-			}
-		}
-	}
-
-	name := res.AccountName
-	if name == "" {
-		name = "API Key " + res.KeyPrefix
-	}
-	_ = os.MkdirAll(a.cfg.AuthDir, 0o755)
-	ca := &auth.Auth{
-		Kind:        "cline",
-		UID:         res.UID,
-		Nickname:    name,
-		AccessToken: key,
-		// Key 无过期概念：ExpiresAt 必须远期，0 会让 NeedsRefresh 恒真（不变量 21 同款陷阱）
-		ExpiresAt: cline.FarFutureExpiry(),
-		FilePath:  filepath.Join(a.cfg.AuthDir, "cline-"+res.UID+".json"),
-	}
-	if err := ca.SaveAtomic(); err != nil {
-		return "", "", fmt.Errorf("保存 Cline 凭据失败：%w", err)
-	}
-	// 日志零 token（不变量 2）：只打 uid 与展示名，绝不打完整 Key
-	log.Printf("cline 账号已添加（粘贴 Key）uid=%s name=%s 同账号告警=%v", res.UID, name, warn != "")
-	a.reloadAccounts()
-	a.afterAccountAdded(provider.Cline)
-	return res.UID, warn, nil
-}
-
 // StartGLMAutoLogin 发起智谱清言自动登录：拉起独立 profile 的浏览器，
 // 用户在真实浏览器里登录，后台经 CDP 自动捕获 Cookie。
 //
@@ -1940,15 +1865,6 @@ func (a *App) reloadAccounts() {
 			rt.Pool.SyncToDir(auths)
 		}
 	}
-	// Cline：一把官方 API Key = 一个账号，凭据由面板「粘贴 API Key」写入。
-	if rt := a.runtime(provider.Cline); rt != nil && rt.Pool != nil {
-		auths, err := auth.LoadClineDir(a.cfg.AuthDir)
-		if err != nil {
-			log.Printf("reload cline accounts: %v", err)
-		} else {
-			rt.Pool.SyncToDir(auths)
-		}
-	}
 	// OfficeAce：华为云果办，凭据由面板「浏览器登录」或「从客户端导入」写入 auths/。
 	// 两条添加路径（OAuth onDone / importOfficeAce）都依赖本分支把新账号同步进池，
 	// 缺了它账号要等 daemon 重启才出现（R34/R41 家族的「声明了却没接线」）。
@@ -2225,10 +2141,6 @@ func (a *App) RefreshCredits(uid string) (int64, error) {
 	if rt == nil || au == nil {
 		return 0, fmt.Errorf("unknown account %s", uid)
 	}
-	if rt.Kind == provider.Oczen {
-		// 匿名通道无积分概念，面板显示「不适用」，无刷新语义。
-		return 0, fmt.Errorf("OpenCodeZen 匿名通道无积分，不适用")
-	}
 	if rt.Kind == provider.Kilo {
 		// 免密免费池同样没有积分概念（面板显示「不适用」）。
 		return 0, fmt.Errorf("Kilo 免费池无积分，不适用")
@@ -2267,7 +2179,7 @@ func (a *App) RefreshAll() RefreshSummary {
 		}
 		// oczen / kilo 无「额度」可刷：纳入只会产生一条无意义的失败记录。
 		// （ZCode 要走刷新：它的额度是 token 口径，同样需要更新才能看到用量。）
-		if rt.Kind == provider.Oczen || rt.Kind == provider.Kilo {
+		if rt.Kind == provider.Kilo {
 			continue
 		}
 		ps := PlatformSummary{Accounts: []AccountRefresh{}}
@@ -2329,9 +2241,6 @@ func (a *App) RemoveAccount(uid string) error {
 	if rt == nil || au == nil {
 		return fmt.Errorf("unknown account %s", uid)
 	}
-	if rt.Kind == provider.Oczen {
-		return fmt.Errorf("OpenCodeZen 匿名通道账号不可删除")
-	}
 	if rt.Kind == provider.Kilo {
 		return fmt.Errorf("Kilo 免费池账号不可删除")
 	}
@@ -2349,9 +2258,6 @@ func (a *App) ResourceDetail(uid string) (remain int64, items []provider.Resourc
 	rt, au := a.findRuntimeAuth(uid)
 	if rt == nil || au == nil || rt.Upstream == nil {
 		return 0, nil, 0, 0, fmt.Errorf("unknown account %s", uid)
-	}
-	if rt.Kind == provider.Oczen {
-		return 0, nil, 0, 0, fmt.Errorf("OpenCodeZen 匿名通道无积分，不适用")
 	}
 	if rt.Kind == provider.Kilo {
 		return 0, nil, 0, 0, fmt.Errorf("Kilo 免费池无积分，不适用")
@@ -2572,9 +2478,6 @@ func (a *App) SetAccountNickname(uid, nickname string) error {
 	if rt == nil || au == nil {
 		return fmt.Errorf("unknown account %s", uid)
 	}
-	if rt.Kind == provider.Oczen {
-		return fmt.Errorf("OpenCodeZen 匿名通道账号不可改名")
-	}
 	if rt.Kind == provider.Kilo {
 		return fmt.Errorf("Kilo 免费池账号不可改名")
 	}
@@ -2705,9 +2608,6 @@ type State struct {
 	// 取不到（无网络/全部环回）时为空串。
 	LanIP string `json:"lan_ip"`
 
-	// OczenAPIKey OpenCodeZen 自定义 API key（只读脱敏回显）：仅用于目录/额度查询的鉴权。
-	OczenAPIKey string `json:"oczen_api_key"`
-
 	// CheckinEnabled 纯签到总开关（只读，保存走 POST /api/config/checkin_enabled）。
 	// 关闭时手动签到与定时签到一律不执行。
 	CheckinEnabled bool `json:"checkin_enabled"`
@@ -2740,7 +2640,6 @@ func (a *App) GetState() State {
 		Running:        a.ServerRunning(),
 		LanIP:          lanIP(),
 		CheckinEnabled: a.cfg.Features.CheckinEnabled,
-		OczenAPIKey:    maskKey(a.cfg.OczenAPIKey),
 	}
 	st.Accounts = a.accountViews()
 	return st
@@ -3153,21 +3052,6 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "uid": uid})
-	})
-	mux.HandleFunc("POST /api/login/cline_key", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			APIKey string `json:"api_key"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			apiError(w, http.StatusBadRequest, "请求体解析失败")
-			return
-		}
-		uid, warn, err := a.SubmitClineKey(req.APIKey)
-		if err != nil {
-			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "uid": uid, "warning": warn})
 	})
 
 	mux.HandleFunc("POST /api/account/checkin", func(w http.ResponseWriter, r *http.Request) {
@@ -3623,6 +3507,12 @@ func buildFeesChannels(modelsByKind map[provider.Kind][]provider.ModelInfo,
 // 上游未返回倍率的模型标记 priced=false，前端显示 unknown。
 func (a *App) FeesInfo() map[string]any {
 	scopes := a.catalog.snapshot()
+	// 旧缓存可能仍有已移除渠道；只过滤展示，不修改磁盘上的历史记录。
+	for key, sc := range scopes {
+		if sc.Channel == "cline" || sc.Channel == "oczen" {
+			delete(scopes, key)
+		}
+	}
 	now := time.Now()
 
 	modelsByKind := map[provider.Kind][]provider.ModelInfo{}

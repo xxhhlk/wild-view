@@ -87,7 +87,7 @@ const window = { addEventListener: () => {}, location: { search: "" } };
 // 源码改写：注入 state + 导出函数
 const patched =
   raw.replace(/let state = null;/, "let state = " + JSON.stringify(FAKE_STATE) + ";") +
-  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState };";
+  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, setState: (s) => { state = s; } };";
 
 // fetch 记录桩：checkin_times 变更要能断言「没点确定就不发请求」。
 // POST /api/config/checkin_times 会「落库」，后续 /api/state 必须回新值——
@@ -140,6 +140,11 @@ const cards = document.getElementById("acctList").innerHTML;
 check("账号卡片已渲染", cards.length > 0);
 check("健康号仍在（未被过滤）", cards.includes("健康号"));
 check("不再渲染路由冷却标签", !/冷却至/.test(cards));
+T.setState({ ...FAKE_STATE, accounts: [{ uid: "kilo-anonymous", group: "kilo", nickname: "Kilo" }] });
+T.renderAccounts();
+const kiloCards = document.getElementById("acctList").innerHTML;
+check("Kilo 固定账号不显示删除和改名", kiloCards.includes("固定账号") && !kiloCards.includes("removeAcct(") && !kiloCards.includes("openRename("));
+T.setState(FAKE_STATE);
 
 // ---- 场景 2：渠道汇总条 ----
 T.renderSummary();

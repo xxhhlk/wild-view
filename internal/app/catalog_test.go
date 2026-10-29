@@ -15,10 +15,10 @@ func TestCatalogAccountIsolation(t *testing.T) {
 	now := time.Now().Unix()
 
 	c.put(CatalogAccount{
-		Channel:  "workbuddy",
-		UID:      "a",
-		Models:   []provider.ModelInfo{{ID: "m1"}},
-		Pricing:  []provider.ModelPricing{{Model: "m1", Channel: "workbuddy", Rate: 0.08}},
+		Channel:       "workbuddy",
+		UID:           "a",
+		Models:        []provider.ModelInfo{{ID: "m1"}},
+		Pricing:       []provider.ModelPricing{{Model: "m1", Channel: "workbuddy", Rate: 0.08}},
 		ModelsStatus:  QueryStatus{LastSuccessAt: now, LastAttemptAt: now, Source: "api"},
 		PricingStatus: QueryStatus{LastSuccessAt: now, LastAttemptAt: now, Source: "api"},
 	})
@@ -80,6 +80,23 @@ func TestCatalogPersistRoundtrip(t *testing.T) {
 	reloaded.remove("qodercn", "u1")
 	if _, ok := reloaded.get("qodercn", "u1"); ok {
 		t.Error("remove 后仍能读到该账号")
+	}
+}
+
+func TestFeesInfoHidesRemovedChannelsButKeepsCache(t *testing.T) {
+	c := newCatalog(filepath.Join(t.TempDir(), "catalog-cache.json"))
+	now := time.Now().Unix()
+	for _, channel := range []string{"cline", "oczen", "workbuddy"} {
+		c.put(CatalogAccount{Channel: channel, UID: "u", Models: []provider.ModelInfo{{ID: "model"}}, ModelsStatus: QueryStatus{LastSuccessAt: now}})
+	}
+	a := &App{catalog: c}
+	result := a.FeesInfo()
+	channels := result["channels"].([]feesChannel)
+	if len(channels) != 1 || channels[0].Channel != "workbuddy" {
+		t.Fatalf("渠道应只包含 workbuddy：%+v", channels)
+	}
+	if result["accounts"] != 1 || len(c.snapshot()) != 3 {
+		t.Fatalf("展示数应为 1 且保留原缓存：accounts=%v cache=%d", result["accounts"], len(c.snapshot()))
 	}
 }
 

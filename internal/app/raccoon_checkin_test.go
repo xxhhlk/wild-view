@@ -60,7 +60,6 @@ func TestRaccoonCheckinWiring(t *testing.T) {
 	// TestMonkeyCodeCheckinWiring / TestLoomyCheckinWiring 正向锁定。
 	for _, k := range []provider.Kind{
 		provider.WorkBuddyAI, provider.QwenWork,
-		provider.Oczen, provider.Cline,
 	} {
 		if !noExplicitCheckin(k) {
 			t.Errorf("❌ noExplicitCheckin(%s) 应为 true（该渠道确无签到活动）", k)

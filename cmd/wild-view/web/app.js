@@ -393,8 +393,8 @@ function renderTopbar() {
 }
 
 // 渠道显示名与 CSS 短类名（后端 group / 费率 channel 均为 provider.Kind）。
-const CH_LABEL = { workbuddy: "WorkBuddyCN", workbuddyai: "WorkBuddyAI", traework: "TraeWork", traecode: "TraeCode", qoder: "Qoder", qodercn: "QoderCN", qodercom: "QoderCOM", qwenwork: "千问办公", glm: "智谱清言", raccoon: "商汤小浣熊", loomy: "Loomy", monkeycode: "MonkeyCode", oczen: "OpenCodeZen", kilo: "Kilo", minimax: "MiniMax", lobsterai: "LobsterAI", zcode: "ZCode", gemini: "Gemini", codearts: "CodeArts", cline: "Cline", officeace: "OfficeAce" };
-const CH_CLASS = { workbuddy: "wb", workbuddyai: "wbai", traework: "trae", traecode: "traecode", qoder: "qoder", qodercn: "qodercn", qodercom: "qodercom", qwenwork: "qwenwork", glm: "glm", raccoon: "raccoon", loomy: "loomy", monkeycode: "monkeycode", oczen: "oczen", kilo: "kilo", minimax: "minimax", lobsterai: "lobsterai", zcode: "zcode", gemini: "gemini", codearts: "codearts", cline: "cline", officeace: "officeace" };
+const CH_LABEL = { workbuddy: "WorkBuddyCN", workbuddyai: "WorkBuddyAI", traework: "TraeWork", traecode: "TraeCode", qoder: "Qoder", qodercn: "QoderCN", qodercom: "QoderCOM", qwenwork: "千问办公", glm: "智谱清言", raccoon: "商汤小浣熊", loomy: "Loomy", monkeycode: "MonkeyCode", kilo: "Kilo", minimax: "MiniMax", lobsterai: "LobsterAI", zcode: "ZCode", gemini: "Gemini", codearts: "CodeArts", officeace: "OfficeAce" };
+const CH_CLASS = { workbuddy: "wb", workbuddyai: "wbai", traework: "trae", traecode: "traecode", qoder: "qoder", qodercn: "qodercn", qodercom: "qodercom", qwenwork: "qwenwork", glm: "glm", raccoon: "raccoon", loomy: "loomy", monkeycode: "monkeycode", kilo: "kilo", minimax: "minimax", lobsterai: "lobsterai", zcode: "zcode", gemini: "gemini", codearts: "codearts", officeace: "officeace" };
 const chLabel = (k) => CH_LABEL[k] || "WorkBuddy";
 const chClass = (k) => CH_CLASS[k] || "wb";
 // chNameOf 数据驱动的渠道名（用量面板 / 流水 / 图表）：命中显示名则用显示名，
@@ -421,14 +421,9 @@ function chPrefixChip(k) {
 // 旧 Qoder 渠道无签到活动（qoder.DailyCheckin 直接返回错误，见 internal/qoder/client.go）；
 // WorkBuddy 国际版不提供手动签到，而是自动对话保活领日活奖励；千问办公无签到活动；
 // Kilo / ZCode / Gemini 无签到活动（ZCode 的领取依赖网页验证码，本工具不实现）；
-// OpenCodeZen 匿名通道无账号概念（也无积分）；Cline 官方无签到活动（Key 不过期，无保活语义）。
 // 小浣熊（R65 setting_info 惰性落账）/ Loomy / MonkeyCode 已实现签到，保留手动按钮。
-const NO_EXPLICIT_CHECKIN = new Set(["qoder", "workbuddyai", "qwenwork", "oczen", "kilo", "zcode", "gemini", "cline"]);
+const NO_EXPLICIT_CHECKIN = new Set(["qoder", "workbuddyai", "qwenwork", "kilo", "zcode", "gemini"]);
 const noExplicitCheckin = (g) => NO_EXPLICIT_CHECKIN.has(g);
-// 粘贴凭据型渠道：凭据是官方文档化的 API Key，创建动作发生在上游网页里，本工具无法代劳，
-// 故走专用输入框（而非「打开浏览器登录」）。当前仅 Cline（sk_ Key，见 internal/cline）。
-const PASTE_KEY_CHANNELS = new Set(["cline"]);
-const isPasteKey = (ch) => PASTE_KEY_CHANNELS.has(ch);
 // 导入型渠道：凭据由本机已登录的官方客户端提供，没有浏览器登录流程（见 internal/app/import_local.go）。
 const IMPORT_LOCAL_CHANNELS = new Set(["raccoon", "loomy", "monkeycode", "officeace"]);
 const isImportLocal = (ch) => IMPORT_LOCAL_CHANNELS.has(ch);
@@ -438,11 +433,11 @@ const isImportLocal = (ch) => IMPORT_LOCAL_CHANNELS.has(ch);
 const WEB_LOGIN_CHANNELS = new Set(["raccoon"]);
 const hasWebLogin = (ch) => WEB_LOGIN_CHANNELS.has(ch);
 // 无手动签到渠道的状态文案：国际版是「自动领日活奖励」，千问办公为「无签到」。
-const NO_CHECKIN_TAG = { workbuddyai: "自动领日活奖励", oczen: "不支持", cline: "无签到" };
+const NO_CHECKIN_TAG = { workbuddyai: "自动领日活奖励" };
 const noCheckinText = (g) => NO_CHECKIN_TAG[g] || "无签到";
 // 无积分概念的渠道：积分区域显示「不适用」，并隐藏刷新积分/明细入口。
-// 内建名单：oczen / kilo（免密免费池，无账号与余额端点）、cline（官方无余额端点，UserResource 恒 0）；
-const NO_CREDITS_BUILTIN = new Set(["oczen", "kilo", "cline"]);
+// 内建名单：kilo（免密免费池，无账号与余额端点）；
+const NO_CREDITS_BUILTIN = new Set(["kilo"]);
 
 // creditsText 账号卡片的积分文案。
 // 拆成「可用 / 不可用 / 临期」三个数字：渠道（如 TraeWork）会下发官方客户端专用的
@@ -481,7 +476,7 @@ function modelCoolingTag(a) {
 }
 
 // 渠道汇总固定顺序（与添加按钮布局一致；traecode 是别名池不单独出现，qoder 下线仅存量兜底）
-const CH_SUMMARY_ORDER = ["workbuddy", "workbuddyai", "traework", "qodercn", "qodercom", "qwenwork", "glm", "minimax", "lobsterai", "zcode", "gemini", "codearts", "cline", "officeace", "kilo", "oczen", "qoder"];
+const CH_SUMMARY_ORDER = ["workbuddy", "workbuddyai", "traework", "qodercn", "qodercom", "qwenwork", "glm", "minimax", "lobsterai", "zcode", "gemini", "codearts", "officeace", "kilo", "qoder"];
 
 // renderSummary 渠道积分汇总条：每渠道一行「可用总积分 / 临期」，末尾合计。
 // 数据全部来自 state.accounts（pool 实时值），与账号卡片同源；
@@ -574,26 +569,16 @@ function renderAccounts() {
       ? `<span class="icon-op off" title="${esc(noCheckinTitle)}" onclick="return false">✓</span>`
       : `<span class="icon-op" title="签到" onclick="checkin('${a.uid}')">✓</span>`;
 
-    // 无积分渠道（匿名 oczen / Cline）：只去掉「刷新积分」，
-    // 保留签到（若渠道有）/停用/删除/改名入口。其中**固定账号**（后端硬拒的 oczen）
-    // 连停用/删除/改名都不给，只留「不可操作」的静态指示，避免用户白点一次——
+    // Kilo 是固定虚拟账号，后端不允许删除或改名。
     const noCredits = hasNoCredits(a.group);
-    const fixedAcct = noCredits;
-    // 问号图标：hover 展示 oczen 通道说明（查询范围 / 私有 Key）。
-    // 放在锁头左侧；用独立的 help 样式（正常亮度 + help 光标），不可点击但 tooltip 可用。
-    // title 内换行用 &#10;（HTML 属性实体），字面 \n 会被部分浏览器吞掉导致无 tooltip。
-    const oczenHelp = `<span class="icon-op help" title="关于 OpenCodeZen 通道：&#10;1. 本工具只读取其免费模型的目录与额度，不做任何转发&#10;2. 在 OpenCodeZen 获取的 API-Key 可在设置中配置，避免匿名账号共享限额超限&#10;3. 部分模型有地域限制，可用性取决于上游">?</span>`;
+    const fixedAcct = a.group === "kilo";
     const ops = fixedAcct
-      ? `${oczenHelp}<span class="icon-op off" title="固定账号，不可停用/删除" onclick="return false">🔒</span>`
+      ? `<span class="icon-op off" title="固定账号，不可删除或改名" onclick="return false">🔒</span>`
       : `${checkinBtn}
           ${noCredits ? "" : `<span class="icon-op" title="刷新积分" onclick="refreshOne('${a.uid}')">↻</span>`}
           <span class="icon-op danger" title="删除账号" onclick="removeAcct('${a.uid}')">✕</span>`;
-    // 显示名：点击直接弹出改名框（固定账号不可改，降级为普通文本）。
-    // oczen 特例：渠道名已由 badge 承担，名字按凭证形态显示「匿名/私有Key」。
-    const isOczen = a.group === "oczen";
-    const oczenName = (state.oczen_api_key || "") ? "私有Key" : "匿名";
     const nameHtml = fixedAcct
-      ? `<span class="acct-name">${esc(isOczen ? oczenName : (a.nickname || shortUid(a.uid)))}</span>`
+      ? `<span class="acct-name">${esc(a.nickname || shortUid(a.uid))}</span>`
       : `<span class="acct-name editable" title="点击修改显示名" onclick="openRename('${a.uid}','${esc(a.nickname || shortUid(a.uid)).replace(/'/g, "&#39;")}')">${esc(a.nickname || shortUid(a.uid))}</span>`;
 
     return `
@@ -838,7 +823,7 @@ async function refreshAll() {
   try {
     const r = await api("/api/account/refresh_all", {});
     detailCache = {}; // 顶层已全部更新，全部明细缓存作废
-    // 无积分概念的渠道（oczen/cline/自定义）后端不参与统计，无需前端再补偿数
+    // 无积分概念的渠道（kilo）后端不参与统计，无需前端再补偿数
     toast(r.busy ? "已有刷新任务进行中"
       : r.failed > 0 ? `积分刷新完成：成功 ${r.ok} / 失败 ${r.failed}${failedDetail(r)}`
       : `积分刷新完成：全部成功（${r.ok} 个）`);
@@ -879,7 +864,6 @@ const NO_CHECKIN_LOGIN_HINT = {
   loomy: "（凭据来自本机已登录的 Loomy 客户端；上游无续期接口，约 14 天后需重新登录并再次导入）",
   monkeycode: "（凭据来自本机已登录的 MonkeyCode 客户端；上游无续期接口，客户端重新登录后需再次导入）",
   glm: "（登录后请按下方指引复制 refresh_token 粘贴回来）",
-  cline: "（无需登录：在 app.cline.bot 注册账号，Account / API Keys → Create API Key 后粘贴即可；Key 不过期也不轮换）",
   officeace: "（凭据来自本机已登录的 OfficeAce 客户端；每日签到的临时凭据约 2 小时有效，本工具会自动续期）",
   minimax: "（设备码授权：点「浏览器登录」后在新页面确认授权，本工具会自动轮询直到完成；可重复添加多个账号）",
   lobsterai: "（本机回调授权：点「浏览器登录」后在有道页面完成登录，浏览器会跳回本机完成授权；支持多个账号）",
@@ -923,17 +907,6 @@ function promptLogin(channel) {
     altBtn.classList.remove("hidden");
     altBtn.onclick = () => { pendingAction = "import"; confirmLogin(); };
     $("loginConfirmOverlay").classList.remove("hidden");
-    return;
-  }
-
-  // 粘贴凭据型渠道（Cline）：弹专用输入框，而不是「打开浏览器登录」。
-  // Cline 的凭据是官方 API Key，创建动作发生在 app.cline.bot 网页里，本工具无法代劳。
-  if (isPasteKey(channel)) {
-    $("clineKeyInput").value = "";
-    $("clineErr").textContent = "";
-    $("clineWarn").style.display = "none";
-    $("clineOverlay").classList.remove("hidden");
-    setTimeout(() => $("clineKeyInput").focus(), 30);
     return;
   }
 
@@ -1010,31 +983,6 @@ async function importLocal(channel) {
     await loadState();
   } catch (e) {
     toast(e.message);
-  }
-}
-
-// submitClineKey 提交用户粘贴的 Cline 官方 API Key。
-// 后端只做「GET /api/v1/api-keys 验证 + 落盘」，零 token 消耗；
-// 返回的 warning 非空表示「这把 Key 与已有账号同属一个 Cline 账号」——
-// 官方配额按账号计（…UsageCostUSDPerUser），同账号多 Key 不会扩额度，必须显式告知。
-async function submitClineKey() {
-  const key = ($("clineKeyInput").value || "").trim();
-  if (!key) { $("clineErr").textContent = "请粘贴 API Key（sk_ 开头）"; return; }
-  const btn = $("btnClineSubmit");
-  btn.disabled = true;
-  $("clineErr").textContent = "验证中…";
-  try {
-    const r = await api("/api/login/cline_key", { api_key: key });
-    $("clineOverlay").classList.add("hidden");
-    $("clineKeyInput").value = "";
-    if (r && r.warning) toast(r.warning, 8000);
-    toast("Cline 账号已添加");
-    await loadState();
-    refreshFees();
-  } catch (e) {
-    $("clineErr").textContent = e.message || "验证失败";
-  } finally {
-    btn.disabled = false;
   }
 }
 
@@ -1401,7 +1349,6 @@ async function clearAdminPassword() {
 let renameUid = null;
 
 function openRename(uid, currentName) {
-  if (uid === "oczen-anon") { toast("OpenCodeZen 匿名通道账号不可改名"); return; }
   renameUid = uid;
   $("rnUid").textContent = shortUid(uid);
   $("rnInput").value = currentName === shortUid(uid) ? "" : (currentName || "");
@@ -1471,9 +1418,6 @@ function bind() {
   $("btnAddRaccoon").onclick = () => promptLogin("raccoon");
   $("btnAddLoomy").onclick = () => promptLogin("loomy");
   $("btnAddMonkeyCode").onclick = () => promptLogin("monkeycode");
-  $("btnAddCline").onclick = () => promptLogin("cline");
-  $("btnClineSubmit").onclick = submitClineKey;
-  $("btnClineCancel").onclick = () => $("clineOverlay").classList.add("hidden");
   $("btnAddOfficeAce").onclick = () => promptLogin("officeace");
   $("btnAddMiniMax").onclick = () => promptLogin("minimax");
   $("btnAddLobsterAI").onclick = () => promptLogin("lobsterai");
@@ -1542,7 +1486,6 @@ function bind() {
   $("btnRenameSave").onclick = saveRename;
   $("btnRenameCancel").onclick = closeRename;
   $("rnInput").addEventListener("keydown", (e) => { if (e.key === "Enter") saveRename(); });
-  // oczen key 用户改动标记：避免把脱敏回显值误存回
 
   // 点击弹层空白处关闭
   $("settingsOverlay").onclick = (e) => { if (e.target === $("settingsOverlay")) closeSettings(); };

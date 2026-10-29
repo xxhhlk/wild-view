@@ -162,10 +162,6 @@ type Config struct {
 		LobsterAICallbackPort int `json:"lobsterai_callback_port,omitempty"`
 	} `json:"login"`
 
-	// OczenAPIKey OpenCodeZen 自定义 API key（sk-...）；空 = 匿名凭证（public）。
-	// 仅用于目录/额度查询鉴权，不再提供面板入口。
-	OczenAPIKey string `json:"oczen_api_key,omitempty"`
-
 	// Features 功能开关（面板「设置」可切换）。
 	Features struct {
 		// CheckinEnabled 纯签到总开关。查看器默认关闭；开启后仅在配置的签到时间

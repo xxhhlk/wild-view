@@ -279,7 +279,7 @@ func TestFeeChannelOrderCoversAllKinds(t *testing.T) {
 	all := []provider.Kind{
 		provider.WorkBuddy, provider.WorkBuddyAI, provider.TraeWork, provider.TraeCode,
 		provider.QoderCN, provider.QoderCOM, provider.QwenWork, provider.GLM,
-		provider.MonkeyCode, provider.Raccoon, provider.Loomy, provider.Oczen, provider.Cline,
+		provider.MonkeyCode, provider.Raccoon, provider.Loomy,
 		provider.Qoder, // 已下线，仅存量路由保留
 	}
 	inOrder := map[provider.Kind]bool{}
@@ -302,17 +302,15 @@ func TestFeeChannelOrderCoversAllKinds(t *testing.T) {
 // TestBuildFeesChannelsHandMeasured：本工具**手工实测**的上下文也要能在面板展示
 // （has_context=true），但必须同时带 hand_measured 标记让前端如实标注来源。
 //
-// 为什么单独一条：cline 这类渠道上游根本不返回上下文，若不把实测值放行，
-// 面板永远只显示「未知」（用户看不到实测的 1M）；但若直接置 ContextFromAPI=true
-// 就是把实测冒充成上游官方值（违反 R46/issue #40 的「不把缺失当结论」原则）。
+// 手工实测的上下文不得冒充上游官方值。
 func TestBuildFeesChannelsHandMeasured(t *testing.T) {
 	models := map[provider.Kind][]provider.ModelInfo{
-		provider.Cline: {
+		provider.TraeWork: {
 			{ID: "cline-free/step-5-preview", ContextWindow: 1_000_000, HandMeasured: true},
 			{ID: "cline-free/unknown-new", ContextWindow: 0}, // 无实测数据
 		},
 	}
-	got := buildFeesChannels(models, nil, []provider.Kind{provider.Cline})
+	got := buildFeesChannels(models, nil, []provider.Kind{provider.TraeWork})
 	if len(got) != 1 {
 		t.Fatalf("want 1 channel, got %d", len(got))
 	}

@@ -30,19 +30,14 @@ const (
 	// 上游无目录/额度/刷新接口 → 模型表静态、额度恒 0、RefreshToken 空实现。
 	MonkeyCode Kind = "monkeycode"
 	TraeCode   Kind = "traecode" // Trae 代码版：与 TraeWork 同一上游、共用账号，function=solo_agent
-	Oczen      Kind = "oczen"    // OpenCodeZen 匿名免费通道（opencode.ai/inference，无账号、凭证固定 public）
 	GLM        Kind = "glm"      // 智谱清言（chatglm.cn 网页版私有接口，凭据为 chatglm_refresh_token）
-	// Cline 免费池（api.cline.bot）：凭据是**官方文档化的 sk_ API Key**（非 OAuth），
-	// 一个账号一把 Key；Key 不轮换 ⇒ 无 RefreshToken、无保活、无签到；
-	// 只暴露 Cline 官方免费池，定位是多账号免费额度调度器 + 反代（见决议 R46）。
-	Cline Kind = "cline"
 	// OfficeAce 华为云果办（hw AgentArts 模型网关，OpenAI 兼容）：凭据来自本机
 	// OfficeAce 桌面端文件（models.json 里的 Basic AK/SK）或自助 OAuth 登录；
 	// 积分/签到走 V11 签名，续期走 DPoP + refresh_token。
 	OfficeAce Kind = "officeace"
 	// Kilo Kilo AI 免费池（api.kilo.ai/api/gateway）：**免密**、无账号、无签到、
 	// 无积分；免费集合由上游清单的 isFree 字段声明（不按模型名猜）。
-	// 与 oczen 同属「无账号渠道」形态（R16）：不建 auth 加载器、不进 reloadAccounts，
+	// 属「无账号渠道」形态（R16）：不建 auth 加载器、不进 reloadAccounts，
 	// 虚拟账号由 main 装配时注入（kilo.AnonymousAuth）。
 	Kilo Kind = "kilo"
 	// Minimax MiniMax Code 中国版（account.minimax.cn + agent.minimax.cn）：
@@ -74,11 +69,11 @@ func (k Kind) String() string { return string(k) }
 // 用于拒绝自定义渠道占用内建渠道名：两者同名时两层会指向不同 Runtime
 // （server 侧 getRuntime 内建优先，而 app 侧 UpdateCustomRuntimes 无条件覆盖），
 // 表现为「面板/账号操作打到自定义池、对话请求走内建渠道」——不报错但静默出错。
-// 同时排除 ModelNamespaces 里的上游命名空间（如 cline-free），以免路由歧义。
+// 同时排除 ModelNamespaces 里的上游命名空间，以免路由歧义。
 func BuiltinKinds() map[string]bool {
 	m := map[string]bool{}
 	for _, k := range []Kind{WorkBuddy, WorkBuddyAI, TraeWork, Qoder, QoderCN, QoderCOM,
-		QwenWork, MonkeyCode, Raccoon, Loomy, TraeCode, Oczen, GLM, Cline, OfficeAce, Kilo, Minimax, LobsterAI,
+		QwenWork, MonkeyCode, Raccoon, Loomy, TraeCode, GLM, OfficeAce, Kilo, Minimax, LobsterAI,
 		Gemini, CodeArts, ZCode} {
 		m[k.String()] = true
 	}
@@ -90,13 +85,9 @@ func BuiltinKinds() map[string]bool {
 
 // ModelNamespaces 声明「上游 ID 自带命名空间」的渠道：命名空间前缀 → 渠道 kind。
 //
-// 这类渠道对客户端**直接透传上游 ID**，不再拼 `<kind>/` 前缀（决议 R59，首例为 cline 免费档：
-// 上游 free[] 的 ID 就是 `cline-free/*`）。路由时该前缀映射回渠道，且**整串**即上游模型名。
-// 同时旧的 `<kind>/<上游ID>` 双层写法（如 `cline/cline-free/*`）继续有效 —— 老配置/老客户端
-// 里的映射表与降级链都是那种写法，不能失效。
-var ModelNamespaces = map[string]Kind{
-	"cline-free": Cline,
-}
+// 保留旧 Cline 模型命名空间的解析，以便历史统计仍归属原渠道。
+// 此映射不注册渠道或启用上游调用。
+var ModelNamespaces = map[string]Kind{"cline-free": Kind("cline")}
 
 // PublicModelID 返回客户端应填写的模型 ID（面板复制 / `/v1/models` / 报错提示同源）。
 // 上游 ID 自带命名空间时直接透传上游 ID；其余渠道拼 `<kind>/<上游ID>`。
