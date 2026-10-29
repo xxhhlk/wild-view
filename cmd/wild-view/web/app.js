@@ -118,7 +118,7 @@ async function refreshFees() {
     const fees = await api("/api/fees");
     lastFees = fees;
     renderFees(fees);
-    toast("模型列表和费率已刷新");
+    toast("已请求刷新，显示的数据可能尚未更新");
   } catch (e) { toast(e.message); } finally {
     $("btnRefreshFees").disabled = false;
   }
@@ -638,6 +638,12 @@ function renderFees(fees) {
   if (fees.error) html += `<div class="note" style="color:var(--danger)">${esc(fees.error)}</div>`;
 
   const UNKNOWN_TIP = "上游未返回，请在客户端自行确认";
+
+  const modelTip = (channel, model) => [
+    `渠道：${chLabel(channel)}`,
+    `模型：${model.model}`,
+    model.id ? `模型 ID：${model.id}` : "",
+  ].filter(Boolean).join("\n");
 
   // 能力图标：模型 ID 后的小标记，title 属性提供文字描述。
   // 只展示上游明确声明的能力；未声明的（字段缺失或上游返回 false）不显示图标。

@@ -87,7 +87,7 @@ const window = { addEventListener: () => {}, location: { search: "" } };
 // 源码改写：注入 state + 导出函数
 const patched =
   raw.replace(/let state = null;/, "let state = " + JSON.stringify(FAKE_STATE) + ";") +
-  "\n; globalThis.__T = { renderAccounts, renderSummary, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState };";
+  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState };";
 
 // fetch 记录桩：checkin_times 变更要能断言「没点确定就不发请求」。
 // POST /api/config/checkin_times 会「落库」，后续 /api/state 必须回新值——
@@ -119,6 +119,20 @@ new Function("document", "window", "localStorage", "fetch", "location", "navigat
 const T = globalThis.__T;
 const results = [];
 const check = (name, pass, extra = "") => results.push([name, pass, extra]);
+
+// 费率表：空目录、单行和双列均应渲染，模型信息须安全转义。
+T.renderFees({ channels: [] });
+check("空费率目录可渲染", document.getElementById("feesBox").innerHTML.includes("note"));
+T.renderFees({ channels: [{ channel: "traework", models: [
+  { model: 'one"<', id: 'traework/one"<', priced: true, rate: 1.25 },
+  { model: "two", priced: false },
+  { model: "three", priced: true, free: true },
+] }] });
+const feeHTML = document.getElementById("feesBox").innerHTML;
+check("费率表渲染多模型", feeHTML.includes("two") && feeHTML.includes("three") && feeHTML.includes("x1.25") && feeHTML.includes("unknown"));
+check("模型提示安全转义", feeHTML.includes("one&quot;&lt;") && !feeHTML.includes('one"<'));
+T.renderFees({ channels: [{ channel: "traework", models: [{ model: "single", priced: false }] }] });
+check("费率表渲染单模型", document.getElementById("feesBox").innerHTML.includes("single"));
 
 // ---- 场景 1：账号卡片渲染（查看器不再展示路由冷却/停用状态） ----
 T.renderAccounts();
