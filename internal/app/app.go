@@ -118,8 +118,17 @@ type App struct {
 	// 前端据此**不再** window.open —— 否则会在日常浏览器里再开一个带登录态的标签页，
 	// 无痕的努力就白费了（授权页照样会复用已登录的华为云账号）。
 	loginBackendOpened bool
-	loginStateFP       string
-	loginKind          provider.Kind
+	// loginOpenMode 本次登录的授权页由谁打开："" = 前端自行 window.open、
+	// "system" = 本工具用系统默认浏览器打开、"incognito" = 无痕窗口、"self" = 渠道自带浏览器。
+	// 前端据此选文案；只要不是空串，前端就**不再** window.open。
+	loginOpenMode string
+	// loginStartedAt 本次登录流程的发起时刻，用于「已有登录进行中」的提示里说明已等多久。
+	loginStartedAt time.Time
+	// openURL 打开授权页的实现（默认 platform.OpenURL）；测试注入用，
+	// 免得回归测试真的去拉起用户的浏览器。
+	openURL      func(string) error
+	loginStateFP string
+	loginKind    provider.Kind
 	// loginErr 上一次登录流程的终态错误（成功/取消/超时为空串）。
 	// 面板的登录轮询只看 login_busy 就宣告「登录完成」，于是失败也会显示成功——
 	// 必须把真实结果带出去（否则用户只看到「登录完成」但账号没加进来）。
@@ -623,6 +632,11 @@ type loginFlow struct {
 	// 否则「想添加第二个账号，却总被授权成已登录的那个」（2026-10-17 用户实测）。
 	openIncognito bool
 
+	// opensBrowser 表示本渠道的 Start 自己会拉起浏览器（小浣熊的独立 profile + CDP 捕获）。
+	// 置 true 时后端**不能**再用系统默认浏览器 OpenURL，否则会多开一个日常标签页，
+	// 而那个标签页没有调试端口、捕获不到凭据。
+	opensBrowser bool
+
 	// pollTimeout 轮询登录结果的超时上限；零值 = 用通用 loginTimeout。
 	//
 	// 为什么需要：部分渠道的本机回调存活时间比通用 5m 长——CodeArts 是 flowTTL（10m）。
@@ -764,9 +778,10 @@ func init() {
 	// Raccoon：网页版 CDP 捕获，签名与其它包同构（两个参数用不上）。
 	// clientFactory 为 nil 表示用默认 client（它根本不发 HTTP 轮询）。
 	loginFlows[provider.Raccoon] = &loginFlow{
-		Start:    loginraccoon.Start,
-		Poll:     wrapPoll(loginraccoon.Poll, loginraccoon.ErrPending, func(a *App, r loginraccoon.Result) error { a.completeRaccoonLogin(r); return nil }),
-		Shutdown: loginraccoon.Shutdown,
+		Start:        loginraccoon.Start,
+		Poll:         wrapPoll(loginraccoon.Poll, loginraccoon.ErrPending, func(a *App, r loginraccoon.Result) error { a.completeRaccoonLogin(r); return nil }),
+		Shutdown:     loginraccoon.Shutdown,
+		opensBrowser: true,
 	}
 
 	// —— 不通过本表发起的渠道（改造前 A 表的四种语义，现统一为说明文字）——
@@ -905,8 +920,10 @@ func (a *App) StartLoginFor(kind string) (string, error) {
 	regionForLogin = a.cfg.Region
 	a.muLogin.Lock()
 	if a.loginBusy {
+		running, started := a.loginKind, a.loginStartedAt
 		a.muLogin.Unlock()
-		return "", errors.New("已有登录流程进行中，请先完成或取消")
+		waited := time.Since(started).Round(time.Second)
+		return "", fmt.Errorf("%s 的登录流程已在进行中（已等待 %s），请先在弹窗里完成，或点「取消登录」后重试", running, waited)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.loginCtx, a.loginCancel = ctx, cancel
@@ -915,6 +932,8 @@ func (a *App) StartLoginFor(kind string) (string, error) {
 	// 仍给一个默认 client（它用不到，但保持非 nil 可避免各处 nil 判断）。
 	a.loginClient = newLoginClient(k)
 	a.loginBusy = true
+	a.loginStartedAt = time.Now()
+	a.loginOpenMode = ""
 	a.muLogin.Unlock()
 
 	// C 表已并入 loginFlows：一条记录一个 Start，结构上不可能再出现
@@ -928,12 +947,15 @@ func (a *App) StartLoginFor(kind string) (string, error) {
 		a.finishLogin()
 		return "", err
 	}
-	// 浏览器打开通常由前端 Web UI 通过 window.open() 完成；但 CodeArts 例外：
-	// 它的授权页会**复用日常浏览器里已登录的华为云会话**，于是「想添加第二个账号，
-	// 却总被授权成已登录的那个」（2026-10-17 用户实测报告）。故由本工具用**无痕窗口**拉起。
-	if flow.openIncognito {
-		a.openAuthURLIncognito(authURL)
-	}
+	// 授权页由谁打开，统一在这里决定（前端只认后端下发的 open_mode）：
+	//   - 无痕渠道（CodeArts）：必须避开日常浏览器的已登录会话，由本工具拉无痕窗口；
+	//   - 自带浏览器的渠道（小浣熊 CDP 独立 profile）：Start 内部已经拉起，不能再开；
+	//   - 其余渠道：由本工具用**系统默认浏览器**打开。
+	//     交给前端 window.open 不可靠——那行代码跑在 `await` 之后，已脱离用户手势，
+	//     Chrome/Edge 会按弹窗拦截（2026-10-30 用户实测：千问办公点了没反应，
+	//     5 分钟后超时），能不能开还取决于用户有没有给过本站弹出权限。
+	//     OpenURL 失败不判登录失败：前端仍会显示可点的兜底链接。
+	a.openAuthURLFor(k, flow, authURL)
 	go a.pollLogin(ctx)
 	log.Printf("%s 登录流程已发起", k)
 	return authURL, nil
@@ -949,18 +971,56 @@ func (a *App) openAuthURLIncognito(url string) {
 	exe, flag, ok := platform.DefaultBrowserIncognito()
 	if !ok {
 		log.Printf("登录：未探测到支持无痕的默认浏览器，退回系统默认打开（可能带上已有登录态）")
+		a.markLoginOpen("system")
 		_ = platform.OpenURL(url)
 		return
 	}
 	if err := platform.LaunchIncognito(exe, flag, url); err != nil {
 		log.Printf("登录：无痕窗口启动失败（%v），退回系统默认打开", err)
+		a.markLoginOpen("system")
 		_ = platform.OpenURL(url)
 		return
 	}
-	a.muLogin.Lock()
-	a.loginBackendOpened = true
-	a.muLogin.Unlock()
+	a.markLoginOpen("incognito")
 	log.Printf("登录：已用无痕窗口打开授权页（避免复用日常浏览器的登录态）")
+}
+
+// openAuthURLFor 决定「授权页由谁打开」并记录下来，返回前端要用的 open_mode：
+//
+//	"incognito" = 无痕窗口（必须避开日常浏览器登录态的渠道）
+//	"self"      = 渠道 Start 自己拉起的独立 profile 浏览器（小浣熊 CDP）
+//	"system"    = 本工具用系统默认浏览器打开
+//	""          = 后端没打开成功，前端自己 window.open（并被兜底链接接住）
+//
+// 为什么默认交给后端：前端 window.open 跑在 await 之后，已脱离用户手势，
+// Chrome/Edge 会按弹窗拦截（2026-10-30 用户实测：千问办公点了没页面，5 分钟后超时）。
+func (a *App) openAuthURLFor(k provider.Kind, flow *loginFlow, authURL string) string {
+	switch {
+	case flow.openIncognito:
+		a.openAuthURLIncognito(authURL)
+	case flow.opensBrowser:
+		a.markLoginOpen("self")
+	default:
+		open := a.openURL
+		if open == nil {
+			open = platform.OpenURL
+		}
+		if err := open(authURL); err != nil {
+			log.Printf("%s 授权页用系统浏览器打开失败（前端改用可点链接兜底）：%v", k, err)
+			return ""
+		}
+		a.markLoginOpen("system")
+	}
+	a.muLogin.Lock()
+	defer a.muLogin.Unlock()
+	return a.loginOpenMode
+}
+
+// markLoginOpen 记录「授权页由谁打开」，前端据此选文案并决定是否还要自己 window.open。
+func (a *App) markLoginOpen(mode string) {
+	a.muLogin.Lock()
+	a.loginOpenMode, a.loginBackendOpened = mode, true
+	a.muLogin.Unlock()
 }
 
 // CancelLogin 取消当前登录流程。
@@ -1734,6 +1794,8 @@ func (a *App) finishLogin() {
 	a.loginBusy = false
 	a.loginCtx, a.loginCancel, a.loginClient = nil, nil, nil
 	a.loginKind = ""
+	a.loginOpenMode = ""
+	a.loginStartedAt = time.Time{}
 	a.muLogin.Unlock()
 }
 
@@ -2884,11 +2946,15 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 		}
 		a.muLogin.Lock()
 		opened := a.loginBackendOpened
+		mode := a.loginOpenMode
 		kind := a.loginKind
 		a.muLogin.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"auth_url":       url,
 			"backend_opened": opened,
+			// open_mode：授权页已由谁打开（system / incognito / self），空串 = 前端自己开。
+			// 前端据此选提示文案，并在被浏览器拦截时显示可点的兜底链接。
+			"open_mode": mode,
 			// needs_poll（2026-10-18 H9）：告知前端这次登录是否需要轮询结果。
 			// GLM 的形态是「只给链接、不跑流程」（凭据靠粘贴 Cookie），后端不置 loginBusy、
 			// 不起 pollLogin；改造前前端只看 auth_url 非空就无条件 startLoginPoll()，

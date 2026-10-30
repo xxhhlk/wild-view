@@ -1069,25 +1069,45 @@ function loginLabelValue() {
   return inp ? inp.value.trim() : "";
 }
 
+// 登录弹层里的兜底链接：授权页没能自动打开时（后端 OpenURL 失败 / 前端被拦截），
+// 用户仍能在一次真实点击里打开它。绝不让用户对着一个空弹层干等 5 分钟超时。
+function showOpenLink(url) {
+  const a = $("lcOpenLink");
+  if (!a) return;
+  a.href = url;
+  a.classList.remove("hidden");
+}
+function hideOpenLink() {
+  const a = $("lcOpenLink");
+  if (a) a.classList.add("hidden");
+}
+
 async function startLogin(channel, accountLabel) {
   try {
     const r = await api("/api/login/start", { channel, account_label: accountLabel || "" });
     const url = r.auth_url;
     if (!url) { toast("无法获取登录链接"); return; }
     $("loginTitle").textContent = `添加 ${chLabel(channel)} 账号`;
-    // 网页版登录：浏览器已由后端拉起（独立 profile），这里只需提示，不能再 window.open
-    // （否则会在用户日常浏览器里再开一个标签页，且那个标签页没有调试端口、捕获不到）。
-    // 后端已用**无痕窗口**拉起授权页（CodeArts）：绝不能再 window.open —— 那会在日常浏览器里
-    // 再开一个带登录态的标签页，用户又会被授权成老账号，无痕那一步就白做了。
-    if (r.backend_opened) {
+    hideOpenLink();
+    // open_mode 由后端下发（授权页由谁打开）；空串 = 后端没开成，这里自己试一次。
+    const mode = r.open_mode || "";
+    if (mode === "incognito") {
       $("loginMsg").textContent = `已为你打开一个独立的无痕浏览器窗口，请在其中完成${chLabel(channel)}登录；`
         + `登录完成后无需任何操作，本工具会自动捕获凭据并添加账号。`;
-    } else if (hasWebLogin(channel)) {
+    } else if (mode === "self") {
       $("loginMsg").textContent = `已为你打开一个独立的浏览器窗口，请在其中完成${chLabel(channel)}登录；`
         + `登录完成后无需任何操作，本工具会自动捕获凭据并添加账号。`;
+    } else if (mode === "system") {
+      $("loginMsg").textContent = `已在你的默认浏览器里打开${chLabel(channel)}授权页，请在其中完成登录；`
+        + `本工具会自动捕获凭据并添加账号。没看到新标签页就点下面的链接。`;
+      showOpenLink(url);
     } else {
       $("loginMsg").textContent = "请在浏览器新窗口中完成登录…";
-      window.open(url, "_blank", "noopener,noreferrer");
+      const w = window.open(url, "_blank", "noopener,noreferrer");
+      if (!w) {
+        $("loginMsg").textContent = `浏览器拦截了新窗口，请点「打开登录页」完成${chLabel(channel)}登录。`;
+        showOpenLink(url);
+      }
     }
     $("loginOverlay").classList.remove("hidden");
     $("btnCopyUrl").dataset.url = url;
@@ -1100,7 +1120,18 @@ async function startLogin(channel, accountLabel) {
     }
     startLoginPoll();
   } catch (e) {
-    toast(e.message);
+    const msg = e.message || "登录发起失败";
+    toast(msg);
+    // 「已有登录流程进行中」时把弹层打开，让「取消」可达：
+    // 否则用户只能干等到 5 分钟超时，界面上没有任何出路（2026-10-30 千问办公实测）。
+    // 这里**不起轮询** —— 本渠道并没有在跑流程，轮询会误报登录完成。
+    if (msg.includes("登录流程已在进行中")) {
+      $("loginTitle").textContent = "登录进行中";
+      $("loginMsg").textContent = msg + "　完成当前登录，或点「取消」后再发起新的登录。";
+      hideOpenLink();
+      $("btnCopyUrl").dataset.url = "";
+      $("loginOverlay").classList.remove("hidden");
+    }
   }
 }
 
