@@ -33,10 +33,10 @@ func TestCreditsUnitTokenChannels(t *testing.T) {
 		}
 	}
 
-	// 免密免费池保持「不适用」语义（token 单位不应该把它也拉进 Token 面板）。
-	for _, k := range []provider.Kind{provider.Kilo} {
-		if !a.creditsNAKind(k.String()) {
-			t.Errorf("%s 应保持 credits_na（无额度概念）", k)
+	// 已移除的免密渠道（历史数据里的 group）保持「不适用」语义。
+	for _, group := range []string{"kilo", "oczen"} {
+		if !a.creditsNAKind(group) {
+			t.Errorf("%s 应保持 credits_na（历史数据无额度概念）", group)
 		}
 	}
 }

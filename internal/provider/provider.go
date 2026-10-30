@@ -35,11 +35,6 @@ const (
 	// OfficeAce 桌面端文件（models.json 里的 Basic AK/SK）或自助 OAuth 登录；
 	// 积分/签到走 V11 签名，续期走 DPoP + refresh_token。
 	OfficeAce Kind = "officeace"
-	// Kilo Kilo AI 免费池（api.kilo.ai/api/gateway）：**免密**、无账号、无签到、
-	// 无积分；免费集合由上游清单的 isFree 字段声明（不按模型名猜）。
-	// 属「无账号渠道」形态（R16）：不建 auth 加载器、不进 reloadAccounts，
-	// 虚拟账号由 main 装配时注入（kilo.AnonymousAuth）。
-	Kilo Kind = "kilo"
 	// Minimax MiniMax Code 中国版（account.minimax.cn + agent.minimax.cn）：
 	// 登录走 OAuth 设备码 + PKCE；凭据是 access/refresh token（**非 JWT**，
 	// 过期时间必须由 expires_in 自算，不能解 exp）；推理是 Anthropic Messages 形状，
@@ -73,7 +68,7 @@ func (k Kind) String() string { return string(k) }
 func BuiltinKinds() map[string]bool {
 	m := map[string]bool{}
 	for _, k := range []Kind{WorkBuddy, WorkBuddyAI, TraeWork, Qoder, QoderCN, QoderCOM,
-		QwenWork, MonkeyCode, Raccoon, Loomy, TraeCode, GLM, OfficeAce, Kilo, Minimax, LobsterAI,
+		QwenWork, MonkeyCode, Raccoon, Loomy, TraeCode, GLM, OfficeAce, Minimax, LobsterAI,
 		Gemini, CodeArts, ZCode} {
 		m[k.String()] = true
 	}

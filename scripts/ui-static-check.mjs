@@ -170,10 +170,7 @@ const cards = document.getElementById("acctList").innerHTML;
 check("账号卡片已渲染", cards.length > 0);
 check("健康号仍在（未被过滤）", cards.includes("健康号"));
 check("不再渲染路由冷却标签", !/冷却至/.test(cards));
-T.setState({ ...FAKE_STATE, accounts: [{ uid: "kilo-anonymous", group: "kilo", nickname: "Kilo" }] });
-T.renderAccounts();
-const kiloCards = document.getElementById("acctList").innerHTML;
-check("Kilo 固定账号不显示删除和改名", kiloCards.includes("固定账号") && !kiloCards.includes("removeAcct(") && !kiloCards.includes("openRename("));
+check("普通账号仍可删除改名", cards.includes("removeAcct(") && cards.includes("openRename("));
 T.setState(FAKE_STATE);
 
 // ---- 场景 2：渠道汇总条 ----

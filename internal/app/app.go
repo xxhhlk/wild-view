@@ -301,8 +301,8 @@ func (a *App) runtimesSnapshot() []*Runtime {
 }
 
 func (a *App) firstRuntime() *Runtime {
-	// 顺序即展示优先级：无调度器活动的免密渠道（Kilo）排末位。
-	for _, k := range []provider.Kind{provider.WorkBuddy, provider.WorkBuddyAI, provider.TraeWork, provider.Qoder, provider.QoderCN, provider.QoderCOM, provider.QwenWork, provider.GLM, provider.Raccoon, provider.Loomy, provider.MonkeyCode, provider.Minimax, provider.LobsterAI, provider.ZCode, provider.Gemini, provider.CodeArts, provider.Kilo} {
+	// 顺序即展示优先级：新渠道追加在末尾。
+	for _, k := range []provider.Kind{provider.WorkBuddy, provider.WorkBuddyAI, provider.TraeWork, provider.Qoder, provider.QoderCN, provider.QoderCOM, provider.QwenWork, provider.GLM, provider.Raccoon, provider.Loomy, provider.MonkeyCode, provider.Minimax, provider.LobsterAI, provider.ZCode, provider.Gemini, provider.CodeArts} {
 		if rt := a.runtime(k); rt != nil {
 			return rt
 		}
@@ -368,7 +368,6 @@ var channelOrder = map[provider.Kind]int{
 	provider.QoderCN: 2, provider.QoderCOM: 3, provider.TraeWork: 4, provider.QwenWork: 5,
 	provider.GLM:       6,
 	provider.OfficeAce: 7,
-	provider.Kilo:      8, // 免密免费池：无账号渠道，排在最后
 	provider.Minimax:   9,
 	provider.LobsterAI: 10,
 	provider.ZCode:     11,
@@ -377,10 +376,10 @@ var channelOrder = map[provider.Kind]int{
 }
 
 // feeChannelOrder 「模型列表和费率」面板的渠道分组顺序。
-// 与 channelOrder 分开维护：本表把 kilo 放首位（免密免费池），
+// 与 channelOrder 分开维护：本表只列查看器当前接入的渠道，
 // 且含 TraeCode（与 TraeWork 共账号但模型集不同，需独立成组）。
 var feeChannelOrder = []provider.Kind{
-	provider.Kilo, provider.WorkBuddy, provider.WorkBuddyAI, provider.QoderCN,
+	provider.WorkBuddy, provider.WorkBuddyAI, provider.QoderCN,
 	provider.QoderCOM, provider.TraeWork, provider.TraeCode, provider.QwenWork, provider.GLM,
 	provider.MonkeyCode,
 	provider.Raccoon,
@@ -409,7 +408,7 @@ func sortChannelsByOrder[T any](items []T, kindOf func(T) provider.Kind) {
 // creditsNAKind 判定该渠道的「积分」概念是否不适用（面板显示「不适用」而不是 0）。
 //
 // 两种成因不同，但 UI 处理一致：
-//   - oczen / kilo：免密免费池，根本没有账号/余额概念；
+//   - oczen / kilo：已移除渠道，历史数据里没有账号/余额概念；
 //   - cline：上游**确无余额端点**（/credits /usage /billing /quota /me 等 12 个候选实测全 404），
 //     属于「查不到」。把这种情况显示成 0 会被误读成「额度已用光」，故同样走 NA。
 //   - 自定义渠道（R66）：无积分与额度接口，同样走 NA。
@@ -417,7 +416,7 @@ func sortChannelsByOrder[T any](items []T, kindOf func(T) provider.Kind) {
 // 注意：**ZCode 不走这里**（尽管它的额度也不是积分）——它有真实的 token 桶要展示，
 // 走 creditsUnit="token" 的「Token 计数」面板，而不是「不适用」（见 creditsUnit）。
 func (a *App) creditsNAKind(group string) bool {
-	return group == provider.Kilo.String()
+	return group == "kilo" || group == "oczen" // 已移除渠道的历史数据
 }
 
 // creditsUnit 该渠道「额度」的计量单位：空串 = 积分（credits，默认），`"token"` = Token 计数。
@@ -438,7 +437,7 @@ func (a *App) creditsUnit(group string) string {
 func noExplicitCheckin(k provider.Kind) bool {
 	// GLM 的每日签到必须先发一轮最小对话（keepaliveChat），属于查看器明确移除的
 	// 聊天保活，故不提供手动/批量入口。
-	return k == provider.WorkBuddyAI || k == provider.GLM || k == provider.QwenWork || k == provider.Kilo || k == provider.ZCode || k == provider.Gemini
+	return k == provider.WorkBuddyAI || k == provider.GLM || k == provider.QwenWork || k == provider.ZCode || k == provider.Gemini
 }
 
 func (a *App) noExplicitCheckinKind(k provider.Kind) bool {
@@ -773,9 +772,6 @@ func init() {
 	// —— 不通过本表发起的渠道（改造前 A 表的四种语义，现统一为说明文字）——
 	loginFlows[provider.MonkeyCode] = &loginFlow{
 		noFlowReason: "MonkeyCode 渠道无需登录：请在面板点「从本机客户端导入」（复用本机已登录的官方客户端凭据）",
-	}
-	loginFlows[provider.Kilo] = &loginFlow{
-		noFlowReason: "Kilo 免费池无需登录，也没有可添加的账号",
 	}
 	// GLM：无编程式登录，只把用户引到页面，凭据由粘贴 Cookie 获得（见 DisplayURL 注释）。
 	loginFlows[provider.GLM] = &loginFlow{
@@ -1742,7 +1738,7 @@ func (a *App) finishLogin() {
 }
 
 // reloadAccounts 用 auths 目录最新文件对齐账号池。
-// 注意：oczen 与 kilo 不在此列——两者的虚拟账号都没有凭证文件，
+// 注意：oczen 与 kilo 不在此列——已移除渠道不再有账号池，
 // SyncToDir 会因「目录扫描不到」而把它从池里剔除，故只能由 main 装配时注入一次。
 func (a *App) reloadAccounts() {
 	if rt := a.runtime(provider.WorkBuddy); rt != nil && rt.Pool != nil {
@@ -2151,10 +2147,6 @@ func (a *App) RefreshCredits(uid string) (int64, error) {
 	if rt == nil || au == nil {
 		return 0, fmt.Errorf("unknown account %s", uid)
 	}
-	if rt.Kind == provider.Kilo {
-		// 免密免费池同样没有积分概念（面板显示「不适用」）。
-		return 0, fmt.Errorf("Kilo 免费池无积分，不适用")
-	}
 	// 注意：ZCode **不**在这里拒绝 —— 它的额度是 token 口径，同样需要刷新才能看到用量；
 	// 它的数字由 credits_unit="token" 标注，不进积分小计与流水（见 creditsUnit）。
 	log.Printf("credits refresh start platform=%s uid=%s", rt.Kind, uid)
@@ -2187,11 +2179,8 @@ func (a *App) RefreshAll() RefreshSummary {
 		if rt == nil || rt.Pool == nil || rt.Upstream == nil || rt.Alias {
 			continue
 		}
-		// oczen / kilo 无「额度」可刷：纳入只会产生一条无意义的失败记录。
+		// oczen / kilo 为已移除渠道，不会进入本循环。
 		// （ZCode 要走刷新：它的额度是 token 口径，同样需要更新才能看到用量。）
-		if rt.Kind == provider.Kilo {
-			continue
-		}
 		ps := PlatformSummary{Accounts: []AccountRefresh{}}
 		for _, st := range rt.Pool.List() {
 			au := rt.Pool.AuthByUID(st.UID)
@@ -2245,14 +2234,11 @@ type AccountRefresh struct {
 }
 
 // RemoveAccount 删除账号（auth 文件 + 内存池）。
-// oczen / kilo 是例外：免密渠道的虚拟账号不可删除（需求约束），返回明确错误而非默默失败。
+// oczen / kilo 已从代码移除；残留 state 目录不再被读取。
 func (a *App) RemoveAccount(uid string) error {
 	rt, au := a.findRuntimeAuth(uid)
 	if rt == nil || au == nil {
 		return fmt.Errorf("unknown account %s", uid)
-	}
-	if rt.Kind == provider.Kilo {
-		return fmt.Errorf("Kilo 免费池账号不可删除")
 	}
 	if au.FilePath != "" {
 		_ = os.Remove(au.FilePath)
@@ -2268,9 +2254,6 @@ func (a *App) ResourceDetail(uid string) (remain int64, items []provider.Resourc
 	rt, au := a.findRuntimeAuth(uid)
 	if rt == nil || au == nil || rt.Upstream == nil {
 		return 0, nil, 0, 0, fmt.Errorf("unknown account %s", uid)
-	}
-	if rt.Kind == provider.Kilo {
-		return 0, nil, 0, 0, fmt.Errorf("Kilo 免费池无积分，不适用")
 	}
 	return a.creditSnapshot(rt, au)
 }
@@ -2487,9 +2470,6 @@ func (a *App) SetAccountNickname(uid, nickname string) error {
 	rt, au := a.findRuntimeAuth(uid)
 	if rt == nil || au == nil {
 		return fmt.Errorf("unknown account %s", uid)
-	}
-	if rt.Kind == provider.Kilo {
-		return fmt.Errorf("Kilo 免费池账号不可改名")
 	}
 	if au.FilePath == "" {
 		return fmt.Errorf("账号 %s 无凭证文件，不可改名", uid)
@@ -3519,7 +3499,7 @@ func (a *App) FeesInfo() map[string]any {
 	scopes := a.catalog.snapshot()
 	// 旧缓存可能仍有已移除渠道；只过滤展示，不修改磁盘上的历史记录。
 	for key, sc := range scopes {
-		if sc.Channel == "cline" || sc.Channel == "oczen" {
+		if sc.Channel == "cline" || sc.Channel == "oczen" || sc.Channel == "kilo" {
 			delete(scopes, key)
 		}
 	}

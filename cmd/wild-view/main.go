@@ -35,7 +35,6 @@ import (
 	"wild-view/internal/config"
 	"wild-view/internal/gemini"
 	"wild-view/internal/glm"
-	"wild-view/internal/kilo"
 	"wild-view/internal/ledger"
 	"wild-view/internal/lobsterai"
 	"wild-view/internal/loomy"
@@ -201,8 +200,6 @@ func main() {
 	if err != nil {
 		fatal("读取 OfficeAce 账号目录失败：%v", err)
 	}
-	// Kilo 免费池同样是免密渠道：没有凭证文件、没有登录流程，只有一个虚拟账号。
-	kiAuths := []*auth.Auth{kilo.AnonymousAuth()}
 	// MiniMax Code：正常多账号渠道，凭据由设备码登录写入 auths/minimax-*.json。
 	mimAuths, err := auth.LoadMinimaxDir(cfg.AuthDir)
 	if err != nil {
@@ -229,8 +226,8 @@ func main() {
 	if err != nil {
 		fatal("读取 CodeArts 账号目录失败：%v", err)
 	}
-	log.Printf("loaded accounts: workbuddy=%d %s, traework=%d, qoder=%d, qodercn=%d, qodercom=%d, workbuddyai=%d, qwenwork=%d, glm=%d, monkeycode=%d, raccoon=%d, loomy=%d, officeace=%d, kilo=%d(匿名), minimax=%d, lobsterai=%d, zcode=%d, gemini=%d, codearts=%d from %s",
-		len(wbAuths), cfg.Region, len(trAuths), len(qdAuths), len(qcnAuths), len(qcmAuths), len(wbaAuths), len(qwAuths), len(glmAuths), len(mcAuths), len(rcAuths), len(lmAuths), len(oaAuths), len(kiAuths), len(mimAuths), len(lobAuths), len(zcdAuths), len(gemAuths), len(caAuths), cfg.AuthDir)
+	log.Printf("loaded accounts: workbuddy=%d %s, traework=%d, qoder=%d, qodercn=%d, qodercom=%d, workbuddyai=%d, qwenwork=%d, glm=%d, monkeycode=%d, raccoon=%d, loomy=%d, officeace=%d, minimax=%d, lobsterai=%d, zcode=%d, gemini=%d, codearts=%d from %s",
+		len(wbAuths), cfg.Region, len(trAuths), len(qdAuths), len(qcnAuths), len(qcmAuths), len(wbaAuths), len(qwAuths), len(glmAuths), len(mcAuths), len(rcAuths), len(lmAuths), len(oaAuths), len(mimAuths), len(lobAuths), len(zcdAuths), len(gemAuths), len(caAuths), cfg.AuthDir)
 
 	wbPool := pool.New(filepath.Join(stateDir, "state-workbuddy.json"))
 	for _, a := range wbAuths {
@@ -287,14 +284,6 @@ func main() {
 	for _, a := range oaAuths {
 		oaPool.Add(a)
 	}
-	// kilo：整池只有一个虚拟账号，state 仅用于记冷却（无积分、无签到）。
-	// 同样要在启动时自愈：任何历史脏数据（冷却/禁用）都会让这条没有第二个账号的渠道直接下线。
-	kiPool := pool.New(filepath.Join(stateDir, "state-kilo.json"))
-	for _, a := range kiAuths {
-		kiPool.Add(a)
-	}
-	kiPool.SetDisabled(kilo.AnonymousUID, false)
-	kiPool.ClearPenalty(kilo.AnonymousUID)
 	// MiniMax：真多账号池（每个 MiniMax 账号一份 OAuth 凭据），不置 SingleAccount。
 	mimPool := pool.New(filepath.Join(stateDir, "state-minimax.json"))
 	for _, a := range mimAuths {
@@ -347,8 +336,6 @@ func main() {
 	mcUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	oaUp := officeace.New()
 	oaUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
-	kiUp := kilo.New()
-	kiUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	mimUp := minimax.New()
 	mimUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	lobUp := lobsterai.New()
@@ -442,11 +429,6 @@ func main() {
 	// CheckinMinutes 用全局签到时间；KeepaliveHours 用配置保活时段（临时凭据约 2h 到期）。
 	oaSch := scheduler.New(scheduler.Config{Pool: oaPool, Upstream: oaUp, Name: "officeace",
 		CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
-	// Kilo 免费池：无账号、无签到、无 token 可保活 ⇒ 定时任务全关。
-	// 必须传**显式空切片**（R39）：传 nil 会被 scheduler.New 当作「未配置」补成
-	// 默认 9:00/21:00 签到与 22:00 保活，每天空跑两次必然失败的调用。
-	kiSch := scheduler.New(scheduler.Config{Pool: kiPool, Upstream: kiUp, Name: "kilo",
-		CheckinMinutes: []int{}, KeepaliveHours: []int{}})
 	// MiniMax：有每日签到（7 天面板，claim 幂等判据是响应里的 claim_result），
 	// 也需要 token 保活（refresh_token 会轮换，刷新后必须落盘）。
 	mimSch := scheduler.New(scheduler.Config{Pool: mimPool, Upstream: mimUp, Name: "minimax",
@@ -495,7 +477,6 @@ func main() {
 		provider.Loomy:      {Kind: provider.Loomy, Pool: lmPool, Upstream: lmUp, Scheduler: lmSch, StaticModels: loomy.StaticModels()},
 		provider.GLM:        {Kind: provider.GLM, Pool: glmPool, Upstream: glmUp, Scheduler: glmSch, StaticModels: glm.StaticModels()},
 		provider.OfficeAce:  {Kind: provider.OfficeAce, Pool: oaPool, Upstream: oaUp, Scheduler: oaSch, StaticModels: officeace.StaticModels()},
-		provider.Kilo:       {Kind: provider.Kilo, Pool: kiPool, Upstream: kiUp, Scheduler: kiSch, StaticModels: kilo.StaticModels()},
 		provider.Minimax:    {Kind: provider.Minimax, Pool: mimPool, Upstream: mimUp, Scheduler: mimSch, StaticModels: minimax.StaticModels()},
 		provider.LobsterAI:  {Kind: provider.LobsterAI, Pool: lobPool, Upstream: lobUp, Scheduler: lobSch, StaticModels: lobsterai.StaticModels()},
 		provider.ZCode:      {Kind: provider.ZCode, Pool: zcdPool, Upstream: zcdUp, Scheduler: zcdSch, StaticModels: zcode.StaticModels()},
@@ -579,9 +560,6 @@ func main() {
 	go glmSch.Run(sctx)
 	// OfficeAce 的 Run 不可漏（R34）：本渠道有签到与保活。
 	go oaSch.Run(sctx)
-	// kilo 的 Run 同样不可漏（R34）：本渠道当前无任何定时任务，Run 只会阻塞等
-	// ctx/配置变更；但漏了它，将来给它加任务就会静默不跑。
-	go kiSch.Run(sctx)
 	// MiniMax 的 Run 不可漏（R34）：本渠道有签到与保活两条定时任务。
 	go mimSch.Run(sctx)
 	// LobsterAI 的 Run 不可漏（R34）：本渠道有签到与保活两条定时任务。
@@ -631,7 +609,7 @@ func main() {
 		if appInst.PanelAuthEnabled() {
 			fmt.Printf("  Panel auth:    admin_password enabled (cookie session, 7d)\n")
 		}
-		fmt.Printf("  Accounts:      workbuddy=%d traework=%d qoder=%d kilo=%d(匿名) minimax=%d lobsterai=%d zcode=%d gemini=%d codearts=%d\n", len(wbAuths), len(trAuths), len(qdAuths), len(kiAuths), len(mimAuths), len(lobAuths), len(zcdAuths), len(gemAuths), len(caAuths))
+		fmt.Printf("  Accounts:      workbuddy=%d traework=%d qoder=%d minimax=%d lobsterai=%d zcode=%d gemini=%d codearts=%d\n", len(wbAuths), len(trAuths), len(qdAuths), len(mimAuths), len(lobAuths), len(zcdAuths), len(gemAuths), len(caAuths))
 		fmt.Printf("\nPress Ctrl+C to exit\n")
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

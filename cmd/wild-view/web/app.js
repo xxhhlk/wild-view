@@ -422,8 +422,8 @@ function renderTopbar() {
 }
 
 // 渠道显示名与 CSS 短类名（后端 group / 费率 channel 均为 provider.Kind）。
-const CH_LABEL = { workbuddy: "WorkBuddyCN", workbuddyai: "WorkBuddyAI", traework: "TraeWork", traecode: "TraeCode", qoder: "Qoder", qodercn: "QoderCN", qodercom: "QoderCOM", qwenwork: "千问办公", glm: "智谱清言", raccoon: "商汤小浣熊", loomy: "Loomy", monkeycode: "MonkeyCode", kilo: "Kilo", minimax: "MiniMax", lobsterai: "LobsterAI", zcode: "ZCode", gemini: "Gemini", codearts: "CodeArts", officeace: "OfficeAce" };
-const CH_CLASS = { workbuddy: "wb", workbuddyai: "wbai", traework: "trae", traecode: "traecode", qoder: "qoder", qodercn: "qodercn", qodercom: "qodercom", qwenwork: "qwenwork", glm: "glm", raccoon: "raccoon", loomy: "loomy", monkeycode: "monkeycode", kilo: "kilo", minimax: "minimax", lobsterai: "lobsterai", zcode: "zcode", gemini: "gemini", codearts: "codearts", officeace: "officeace" };
+const CH_LABEL = { workbuddy: "WorkBuddyCN", workbuddyai: "WorkBuddyAI", traework: "TraeWork", traecode: "TraeCode", qoder: "Qoder", qodercn: "QoderCN", qodercom: "QoderCOM", qwenwork: "千问办公", glm: "智谱清言", raccoon: "商汤小浣熊", loomy: "Loomy", monkeycode: "MonkeyCode", minimax: "MiniMax", lobsterai: "LobsterAI", zcode: "ZCode", gemini: "Gemini", codearts: "CodeArts", officeace: "OfficeAce" };
+const CH_CLASS = { workbuddy: "wb", workbuddyai: "wbai", traework: "trae", traecode: "traecode", qoder: "qoder", qodercn: "qodercn", qodercom: "qodercom", qwenwork: "qwenwork", glm: "glm", raccoon: "raccoon", loomy: "loomy", monkeycode: "monkeycode", minimax: "minimax", lobsterai: "lobsterai", zcode: "zcode", gemini: "gemini", codearts: "codearts", officeace: "officeace" };
 const chLabel = (k) => CH_LABEL[k] || "WorkBuddy";
 const chClass = (k) => CH_CLASS[k] || "wb";
 // chNameOf 数据驱动的渠道名（用量面板 / 流水 / 图表）：命中显示名则用显示名，
@@ -449,9 +449,9 @@ function chPrefixChip(k) {
 // （`internal/app/app.go`；两处不一致会出现「按钮亮着但点了必失败」或「按钮灰着但后端能签」）：
 // 旧 Qoder 渠道无签到活动（qoder.DailyCheckin 直接返回错误，见 internal/qoder/client.go）；
 // WorkBuddy 国际版不提供手动签到，而是自动对话保活领日活奖励；千问办公无签到活动；
-// Kilo / ZCode / Gemini 无签到活动（ZCode 的领取依赖网页验证码，本工具不实现）；
+// ZCode / Gemini 无签到活动（ZCode 的领取依赖网页验证码，本工具不实现）；
 // 小浣熊（R65 setting_info 惰性落账）/ Loomy / MonkeyCode 已实现签到，保留手动按钮。
-const NO_EXPLICIT_CHECKIN = new Set(["qoder", "workbuddyai", "qwenwork", "kilo", "zcode", "gemini"]);
+const NO_EXPLICIT_CHECKIN = new Set(["qoder", "workbuddyai", "qwenwork", "zcode", "gemini"]);
 const noExplicitCheckin = (g) => NO_EXPLICIT_CHECKIN.has(g);
 // 导入型渠道：凭据由本机已登录的官方客户端提供，没有浏览器登录流程（见 internal/app/import_local.go）。
 const IMPORT_LOCAL_CHANNELS = new Set(["raccoon", "loomy", "monkeycode", "officeace"]);
@@ -465,8 +465,9 @@ const hasWebLogin = (ch) => WEB_LOGIN_CHANNELS.has(ch);
 const NO_CHECKIN_TAG = { workbuddyai: "自动领日活奖励" };
 const noCheckinText = (g) => NO_CHECKIN_TAG[g] || "无签到";
 // 无积分概念的渠道：积分区域显示「不适用」，并隐藏刷新积分/明细入口。
-// 内建名单：kilo（免密免费池，无账号与余额端点）；
-const NO_CREDITS_BUILTIN = new Set(["kilo"]);
+// 历史名单（渠道本体已移除，仅为兼容旧 state/旧流水）：kilo / oczen / cline；
+// 与后端 creditsNAKind 同口径。
+const NO_CREDITS_BUILTIN = new Set(["kilo", "oczen", "cline"]);
 
 // creditsText 账号卡片的积分文案。
 // 拆成「可用 / 不可用 / 临期」三个数字：渠道（如 TraeWork）会下发官方客户端专用的
@@ -505,7 +506,7 @@ function modelCoolingTag(a) {
 }
 
 // 渠道汇总固定顺序（与添加按钮布局一致；traecode 是别名池不单独出现，qoder 下线仅存量兜底）
-const CH_SUMMARY_ORDER = ["workbuddy", "workbuddyai", "traework", "qodercn", "qodercom", "qwenwork", "glm", "minimax", "lobsterai", "zcode", "gemini", "codearts", "officeace", "kilo", "qoder"];
+const CH_SUMMARY_ORDER = ["workbuddy", "workbuddyai", "traework", "qodercn", "qodercom", "qwenwork", "glm", "minimax", "lobsterai", "zcode", "gemini", "codearts", "officeace", "qoder"];
 
 // renderSummary 渠道积分汇总条：每渠道一行「可用总积分 / 临期」，末尾合计。
 // 数据全部来自 state.accounts（pool 实时值），与账号卡片同源；
@@ -598,17 +599,12 @@ function renderAccounts() {
       ? `<span class="icon-op off" title="${esc(noCheckinTitle)}" onclick="return false">✓</span>`
       : `<span class="icon-op" title="签到" onclick="checkin('${a.uid}')">✓</span>`;
 
-    // Kilo 是固定虚拟账号，后端不允许删除或改名。
+    // 无积分渠道（历史数据）只隐藏「刷新积分」，其余账号操作照常。
     const noCredits = hasNoCredits(a.group);
-    const fixedAcct = a.group === "kilo";
-    const ops = fixedAcct
-      ? `<span class="icon-op off" title="固定账号，不可删除或改名" onclick="return false">🔒</span>`
-      : `${checkinBtn}
+    const ops = `${checkinBtn}
           ${noCredits ? "" : `<span class="icon-op" title="刷新积分" onclick="refreshOne('${a.uid}')">↻</span>`}
           <span class="icon-op danger" title="删除账号" onclick="removeAcct('${a.uid}')">✕</span>`;
-    const nameHtml = fixedAcct
-      ? `<span class="acct-name">${esc(a.nickname || shortUid(a.uid))}</span>`
-      : `<span class="acct-name editable" title="点击修改显示名" onclick="openRename('${a.uid}','${esc(a.nickname || shortUid(a.uid)).replace(/'/g, "&#39;")}')">${esc(a.nickname || shortUid(a.uid))}</span>`;
+    const nameHtml = `<span class="acct-name editable" title="点击修改显示名" onclick="openRename('${a.uid}','${esc(a.nickname || shortUid(a.uid)).replace(/'/g, "&#39;")}')">${esc(a.nickname || shortUid(a.uid))}</span>`;
 
     return `
     <div class="acct-card${disabledClass}${coolingClass}">

@@ -170,7 +170,7 @@ func TestReloginChannelSetMatchesBackend(t *testing.T) {
 
 	// 第 2 层：有同步终态的渠道直调，错误信息不得是 unknown login provider。
 	a, _ := newOfficeAceBadgeApp(t)
-	for _, ch := range []string{"officeace", "monkeycode", "kilo", "glm"} {
+	for _, ch := range []string{"officeace", "monkeycode", "glm"} {
 		_, err := a.StartLoginFor(ch)
 		if err != nil && strings.Contains(err.Error(), "unknown login provider") {
 			t.Errorf("StartLoginFor(%q) 落到 default 分支（未登记）：%v", ch, err)

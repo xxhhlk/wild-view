@@ -698,8 +698,7 @@ var (
 		string(provider.QwenWork): true, string(provider.MonkeyCode): true,
 		string(provider.Raccoon): true, string(provider.Loomy): true,
 		string(provider.GLM): true,
-		"cline":              true, "oczen": true, // 保留历史统计的渠道归属，不注册上游渠道。
-		string(provider.Kilo):      true, // 漏了它 ⇒ kilo 的 token 与请求都不进平台概览表
+		"cline":              true, "oczen": true, "kilo": true, // 保留历史统计的渠道归属，不注册上游渠道。
 		string(provider.Minimax):   true,
 		string(provider.LobsterAI): true,
 		string(provider.ZCode):     true,
@@ -746,7 +745,7 @@ func normalizePlatform(g string) string {
 // noExpiryChannel 判定渠道是否无临期/到期概念（kilo 免费池：不存在账号/余额概念，
 // resource_detail 无数据可返，临期数据喂入方须跳过，否则每轮恒报失败噪音）。
 func noExpiryChannel(g string) bool {
-	return g == string(provider.Kilo) || g == "oczen" // 兼容旧统计数据
+	return g == "kilo" || g == "oczen" // 兼容已移除渠道的历史数据
 }
 
 // platformRowsLocked 生成平台表行（调用方须持锁）：按 group 聚合账号数/余额/今日
