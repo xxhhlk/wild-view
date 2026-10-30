@@ -848,7 +848,7 @@ async function refreshAll() {
   try {
     const r = await api("/api/account/refresh_all", {});
     detailCache = {}; // 顶层已全部更新，全部明细缓存作废
-    // 无积分概念的渠道（kilo）后端不参与统计，无需前端再补偿数
+    // 无积分概念的渠道（历史数据里的 kilo/oczen/cline）后端不参与统计，无需前端再补偿数
     toast(r.busy ? "已有刷新任务进行中"
       : r.failed > 0 ? `积分刷新完成：成功 ${r.ok} / 失败 ${r.failed}${failedDetail(r)}`
       : `积分刷新完成：全部成功（${r.ok} 个）`);
