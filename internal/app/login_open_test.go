@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -9,7 +8,11 @@ import (
 	"wild-view/internal/provider"
 )
 
-// 授权页由谁打开，决定「点登录却看不到页面」是否会发生（2026-10-30 千问办公实测）。
+// 登录授权页的「由谁打开」与「忙锁提示」。
+//
+// 2026-10-30 千问办公报「点登录没页面」：日志证实授权页照常打开、只是 5 分钟内没完成
+// 授权（21:33 / 21:50 两次超时；23:37 同一份代码 54 秒登录成功）。
+// 真正缺的是忙锁提示不清楚、取消入口不可达 —— 最初「弹窗被拦截」的判断不成立，已回退。
 
 // openedState 读取本次登录的打开方式与「后端是否已打开」。
 func (a *App) openedState() (mode string, backendOpened bool) {
@@ -18,44 +21,27 @@ func (a *App) openedState() (mode string, backendOpened bool) {
 	return a.loginOpenMode, a.loginBackendOpened
 }
 
-func TestOpenAuthURLForUsesSystemBrowserByDefault(t *testing.T) {
+func TestOpenAuthURLForLeavesNormalChannelsToFrontend(t *testing.T) {
 	a := catalogTestApp(t)
-	var got string
-	a.openURL = func(url string) error { got = url; return nil }
 
 	mode := a.openAuthURLFor(provider.QwenWork, &loginFlow{}, "https://example/oauth2/auth")
-	if mode != "system" {
-		t.Fatalf("open_mode = %q，期望 system（交给前端 window.open 会被弹窗拦截）", mode)
+	if mode != "" {
+		t.Fatalf("open_mode = %q，期望空串（普通渠道仍由前端 window.open）", mode)
 	}
-	if got != "https://example/oauth2/auth" {
-		t.Fatalf("未把授权地址交给系统浏览器：%q", got)
-	}
-	if _, opened := a.openedState(); !opened {
-		t.Fatal("backend_opened 应为 true，否则前端会再开一次")
+	if _, opened := a.openedState(); opened {
+		t.Fatal("后端没打开却标记 backend_opened，前端就不会再开授权页了")
 	}
 }
 
 func TestOpenAuthURLForKeepsChannelOwnedBrowser(t *testing.T) {
 	a := catalogTestApp(t)
-	called := false
-	a.openURL = func(string) error { called = true; return nil }
 
 	mode := a.openAuthURLFor(provider.Raccoon, &loginFlow{opensBrowser: true}, "https://example/x")
-	if mode != "self" || called {
-		t.Fatalf("自带浏览器的渠道不该再由后端开一次：mode=%q called=%v", mode, called)
+	if mode != "self" {
+		t.Fatalf("自带浏览器的渠道应回报 self，得 %q", mode)
 	}
-}
-
-func TestOpenAuthURLForFallsBackToFrontendWhenOpenFails(t *testing.T) {
-	a := catalogTestApp(t)
-	a.openURL = func(string) error { return errors.New("no display") }
-
-	mode := a.openAuthURLFor(provider.QwenWork, &loginFlow{}, "https://example/x")
-	if mode != "" {
-		t.Fatalf("打开失败时 open_mode 应为空串（前端显示可点链接兜底），得 %q", mode)
-	}
-	if _, opened := a.openedState(); opened {
-		t.Fatal("打开失败却标记 backend_opened，前端会既不开页面也不给链接")
+	if _, opened := a.openedState(); !opened {
+		t.Fatal("self 必须标记 backend_opened，否则前端会再开一个没有调试端口的标签页")
 	}
 }
 
@@ -72,7 +58,7 @@ func TestStartLoginBusyNamesRunningChannel(t *testing.T) {
 		t.Fatal("忙碌时应返回错误")
 	}
 	msg := err.Error()
-	for _, want := range []string{"qwenwork", "登录流程已在进行中", "取消"} {
+	for _, want := range []string{"qwenwork", "登录流程已在进行中", "1m30s", "取消"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("提示缺少 %q：%s", want, msg)
 		}

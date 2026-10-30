@@ -1089,7 +1089,8 @@ async function startLogin(channel, accountLabel) {
     if (!url) { toast("无法获取登录链接"); return; }
     $("loginTitle").textContent = `添加 ${chLabel(channel)} 账号`;
     hideOpenLink();
-    // open_mode 由后端下发（授权页由谁打开）；空串 = 后端没开成，这里自己试一次。
+    // open_mode 由后端下发（授权页由谁打开）：空串 = 本渠道就该由前端开；
+    // 开了但被浏览器拦成 null 时，退化成下面的可点链接，绝不静默。
     const mode = r.open_mode || "";
     if (mode === "incognito") {
       $("loginMsg").textContent = `已为你打开一个独立的无痕浏览器窗口，请在其中完成${chLabel(channel)}登录；`

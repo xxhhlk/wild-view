@@ -118,17 +118,14 @@ type App struct {
 	// 前端据此**不再** window.open —— 否则会在日常浏览器里再开一个带登录态的标签页，
 	// 无痕的努力就白费了（授权页照样会复用已登录的华为云账号）。
 	loginBackendOpened bool
-	// loginOpenMode 本次登录的授权页由谁打开："" = 前端自行 window.open、
-	// "system" = 本工具用系统默认浏览器打开、"incognito" = 无痕窗口、"self" = 渠道自带浏览器。
-	// 前端据此选文案；只要不是空串，前端就**不再** window.open。
+	// loginOpenMode 本次登录的授权页由谁打开："" = 前端 window.open（绝大多数渠道）、
+	// "incognito" = 无痕窗口、"self" = 渠道自带浏览器、"system" = 无痕启动失败后的退回。
+	// 前端据此选文案；非空串时**不再** window.open。
 	loginOpenMode string
 	// loginStartedAt 本次登录流程的发起时刻，用于「已有登录进行中」的提示里说明已等多久。
 	loginStartedAt time.Time
-	// openURL 打开授权页的实现（默认 platform.OpenURL）；测试注入用，
-	// 免得回归测试真的去拉起用户的浏览器。
-	openURL      func(string) error
-	loginStateFP string
-	loginKind    provider.Kind
+	loginStateFP   string
+	loginKind      provider.Kind
 	// loginErr 上一次登录流程的终态错误（成功/取消/超时为空串）。
 	// 面板的登录轮询只看 login_busy 就宣告「登录完成」，于是失败也会显示成功——
 	// 必须把真实结果带出去（否则用户只看到「登录完成」但账号没加进来）。
@@ -987,29 +984,21 @@ func (a *App) openAuthURLIncognito(url string) {
 
 // openAuthURLFor 决定「授权页由谁打开」并记录下来，返回前端要用的 open_mode：
 //
-//	"incognito" = 无痕窗口（必须避开日常浏览器登录态的渠道）
+//	"incognito" = 无痕窗口（授权页会复用日常浏览器已登录会话的渠道，如 CodeArts）
 //	"self"      = 渠道 Start 自己拉起的独立 profile 浏览器（小浣熊 CDP）
-//	"system"    = 本工具用系统默认浏览器打开
-//	""          = 后端没打开成功，前端自己 window.open（并被兜底链接接住）
+//	"system"    = 上面两种情况的启动失败退回（见 openAuthURLIncognito）
+//	""          = 交给前端 window.open —— 绝大多数渠道走这条，历史验证可用
 //
-// 为什么默认交给后端：前端 window.open 跑在 await 之后，已脱离用户手势，
-// Chrome/Edge 会按弹窗拦截（2026-10-30 用户实测：千问办公点了没页面，5 分钟后超时）。
-func (a *App) openAuthURLFor(k provider.Kind, flow *loginFlow, authURL string) string {
+// 交给后端的只有需要隔离登录态的两条：本工具可能和浏览器不在同一台机器上
+// （面板经局域网访问），后端擅自 OpenURL 会把授权页开到**服务器**的浏览器里。
+func (a *App) openAuthURLFor(_ provider.Kind, flow *loginFlow, authURL string) string {
 	switch {
 	case flow.openIncognito:
 		a.openAuthURLIncognito(authURL)
 	case flow.opensBrowser:
 		a.markLoginOpen("self")
 	default:
-		open := a.openURL
-		if open == nil {
-			open = platform.OpenURL
-		}
-		if err := open(authURL); err != nil {
-			log.Printf("%s 授权页用系统浏览器打开失败（前端改用可点链接兜底）：%v", k, err)
-			return ""
-		}
-		a.markLoginOpen("system")
+		return ""
 	}
 	a.muLogin.Lock()
 	defer a.muLogin.Unlock()
