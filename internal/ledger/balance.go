@@ -89,10 +89,11 @@ func (l *Ledger) BalanceSeries(days int) []BalanceSeries {
 	cutoff := time.Now().AddDate(0, 0, -days).Unix()
 
 	// 覆盖窗口的月分段（当前月 + 上一个月，days ≤ 31 足够）。
+	// 上月标签走 monthTagShift：月末直接 AddDate 会溢出回本月，同一文件被读两遍、采样点翻倍。
 	now := time.Now()
 	files := []string{
 		filepath.Join(l.dir, fmt.Sprintf("balance-%s.jsonl", now.Format("200601"))),
-		filepath.Join(l.dir, fmt.Sprintf("balance-%s.jsonl", now.AddDate(0, -1, 0).Format("200601"))),
+		filepath.Join(l.dir, fmt.Sprintf("balance-%s.jsonl", monthTagShift(now, 1))),
 	}
 
 	byAcct := map[string]*BalanceSeries{}
