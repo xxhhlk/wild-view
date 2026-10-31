@@ -1362,6 +1362,34 @@ function closeSettings() {
   $("settingsOverlay").classList.add("hidden");
 }
 
+// stripAscii 去掉不可打印 ASCII 之外的字符（中文、全角、带重音字母等）。
+// 管理密码只允许 0x20–0x7E：输入法状态不同会产出不同码位，留到保存时再报错太晚。
+function stripAscii(v) {
+  return String(v == null ? "" : v).replace(/[^\x20-\x7e]/g, "");
+}
+
+// asciiOnlyInput 让输入框只保留可打印 ASCII。
+// 组合输入（拼音候选）期间不干预，compositionend / input 时再清理，避免打断输入法；
+// 粘贴同样兜底。被过滤时回调一次，供调用方提示。
+function asciiOnlyInput(el, onFiltered) {
+  if (!el) return;
+  let composing = false;
+  const clean = () => {
+    const v = el.value;
+    const next = stripAscii(v);
+    if (next === v) return;
+    const pos = el.selectionStart == null ? next.length : el.selectionStart;
+    const shift = v.length - next.length;
+    el.value = next;
+    try { el.setSelectionRange(Math.max(0, pos - shift), Math.max(0, pos - shift)); } catch (e) { /* 不支持则忽略 */ }
+    if (onFiltered) onFiltered();
+  };
+  el.addEventListener("compositionstart", () => { composing = true; });
+  el.addEventListener("compositionend", () => { composing = false; clean(); });
+  el.addEventListener("input", () => { if (!composing) clean(); });
+  el.addEventListener("paste", () => setTimeout(clean, 0));
+}
+
 async function saveSettings() {
   // 1) 监听地址 + 管理密码（保存即热切换；改密码会使旧会话失效）
   const body = { host: selectedHost(), port: parseInt($("inPort").value, 10) || 0 };
@@ -1530,6 +1558,14 @@ function bind() {
   $("btnClearAdminPass").onclick = clearAdminPassword;
   $("btnAdminLogin").onclick = submitLogin;
   $("adminLoginPass").onkeydown = (e) => { if (e.key === "Enter") submitLogin(); };
+  // 设置新密码时就过滤非 ASCII（登录框不过滤：老配置若已有非 ASCII 密码，仍要能登进来）。
+  let asciiHintAt = 0;
+  asciiOnlyInput($("adminPassInput"), () => {
+    const now = Date.now();
+    if (now - asciiHintAt < 3000) return;
+    asciiHintAt = now;
+    toast("已过滤非 ASCII 字符：管理密码只能使用英文、数字和半角符号");
+  });
 
   // 顶栏齿轮进入统一设置（点击地址/Key 文本仍为复制）
   $("btnSettings").onclick = openSettings;
