@@ -1366,6 +1366,11 @@ async function saveSettings() {
   // 1) 监听地址 + 管理密码（保存即热切换；改密码会使旧会话失效）
   const body = { host: selectedHost(), port: parseInt($("inPort").value, 10) || 0 };
   const adminPass = $("adminPassInput").value.trim();
+  // 只允许可打印 ASCII：中文与全角字符在切换输入法后极易输错（后端同样会拒）。
+  if (adminPass && /[^\x20-\x7e]/.test(adminPass)) {
+    toast("管理密码只能使用英文、数字和半角符号（不支持中文与全角字符）");
+    return;
+  }
   if (adminPass) body.admin_password = adminPass; // 空 = 不改动，避免覆盖已设密码
   try {
     await api("/api/config/listen", body);

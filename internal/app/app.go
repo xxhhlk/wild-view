@@ -2407,8 +2407,13 @@ func (a *App) SetListen(host string, port int) error {
 
 // SetAdminPassword 修改管理面板密码（空串 = 关闭面板鉴权）。
 // 当前监听为对外地址时不允许清空（见 SetListen）；改密码后所有旧会话立即失效。
+// 只接受可打印 ASCII：中文与全角字符在不同输入法下码位不同（全角/半角、中英文标点），
+// 登录时极易因为输入法状态输错，一律在保存阶段拒绝。
 func (a *App) SetAdminPassword(pass string) error {
 	pass = strings.TrimSpace(pass)
+	if pass != "" && !validAdminPass(pass) {
+		return errors.New("管理密码只能使用英文、数字和半角符号（不支持中文与全角字符）")
+	}
 	a.mu.Lock()
 	if pass == "" && requireRemoteAuth(a.cfg.Listen) {
 		a.mu.Unlock()
@@ -2423,6 +2428,16 @@ func (a *App) SetAdminPassword(pass string) error {
 	a.auth.dropAll() // 密码变更：旧 cookie 的 label 失配，已自动失效，这里同步清内存
 	log.Printf("管理密码已更新：%s", map[bool]string{true: "已启用", false: "已关闭"}[pass != ""])
 	return nil
+}
+
+// validAdminPass 面板密码允许的字符集：可打印 ASCII（0x20–0x7E）。
+func validAdminPass(pass string) bool {
+	for _, r := range pass {
+		if r < 0x20 || r > 0x7E {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) SetAutostart(on bool) error {
