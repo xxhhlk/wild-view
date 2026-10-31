@@ -79,7 +79,9 @@ func (a *App) panelLogin(pass, clientIP string) (token, brief string, ok bool, m
 	if !a.auth.allowLogin(clientIP) {
 		return "", "", false, "尝试次数过多，请 5 分钟后再试"
 	}
-	if subtle.ConstantTimeCompare([]byte(pass), []byte(valid)) != 1 {
+	// 输入侧与保存侧同口径：折半角 + 去首尾空白。
+	// 否则在全角输入法状态下打出的密码（或从别处复制时多带的空格）会判定为错误。
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(halfWidthASCII(pass))), []byte(valid)) != 1 {
 		a.auth.noteFail(clientIP)
 		log.Printf("管理面板登录失败 ip=%s", clientIP)
 		return "", "", false, "密码错误"

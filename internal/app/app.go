@@ -2405,12 +2405,33 @@ func (a *App) SetListen(host string, port int) error {
 	return nil
 }
 
+// halfWidthASCII 把全角 ASCII（！～，U+FF01–U+FF5E）与全角空格（U+3000）折成半角，
+// 其余字符原样保留（含中文——由 validAdminPass 负责拒绝）。
+//
+// 为什么要折而不是直接拒：全角/半角是输入法状态决定的，同一个键位两种码位；
+// 用户在全角状态下打 `Ｐａｓｓ` 与半角 `Pass` 是同一串字符，没必要为此报错。
+func halfWidthASCII(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 0xff01 && r <= 0xff5e:
+			b.WriteRune(r - 0xfee0)
+		case r == 0x3000:
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // SetAdminPassword 修改管理面板密码（空串 = 关闭面板鉴权）。
 // 当前监听为对外地址时不允许清空（见 SetListen）；改密码后所有旧会话立即失效。
-// 只接受可打印 ASCII：中文与全角字符在不同输入法下码位不同（全角/半角、中英文标点），
-// 登录时极易因为输入法状态输错，一律在保存阶段拒绝。
+// 只接受可打印 ASCII：中文在不同输入法下码位不同（全角/半角、中英文标点），
+// 登录时极易因为输入法状态输错，一律在保存阶段拒绝；全角先自动折成半角。
 func (a *App) SetAdminPassword(pass string) error {
-	pass = strings.TrimSpace(pass)
+	pass = strings.TrimSpace(halfWidthASCII(pass))
 	if pass != "" && !validAdminPass(pass) {
 		return errors.New("管理密码只能使用英文、数字和半角符号（不支持中文与全角字符）")
 	}

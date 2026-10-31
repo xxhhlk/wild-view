@@ -87,7 +87,7 @@ const window = { addEventListener: () => {}, location: { search: "" } };
 // 源码改写：注入 state + 导出函数
 const patched =
   raw.replace(/let state = null;/, "let state = " + JSON.stringify(FAKE_STATE) + ";") +
-  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, refreshFees, showOpenLink, hideOpenLink, stripAscii, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, setState: (s) => { state = s; } };";
+  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, refreshFees, showOpenLink, hideOpenLink, toHalfWidthAscii, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, setState: (s) => { state = s; } };";
 
 // fetch 记录桩：checkin_times 变更要能断言「没点确定就不发请求」。
 // POST /api/config/checkin_times 会「落库」，后续 /api/state 必须回新值——
@@ -173,11 +173,12 @@ T.hideOpenLink();
 check("后端已打开时收起兜底链接", openLink.classList.contains("hidden"));
 check("前端按后端 open_mode 决定是否自己打开", raw.includes("r.open_mode") && /if \(!w\)/.test(raw));
 
-// ---- 场景：管理密码输入框只留可打印 ASCII（输入法状态不该影响密码）----
-check("过滤中文与全角字符", T.stripAscii("中文abc１２３") === "abc");
-check("保留 ASCII 符号与空格", T.stripAscii("P@ss word-1") === "P@ss word-1");
-check("全角字母被清空", T.stripAscii("ｐａｓｓ") === "");
-check("设置框接了输入阶段过滤", raw.includes('asciiOnlyInput($("adminPassInput")'));
+// ---- 场景：管理密码输入框只留半角 ASCII（输入法状态不该影响密码）----
+check("全角数字字母自动折半角", T.toHalfWidthAscii("中文abc１２３") === "abc123");
+check("全角符号折半角", T.toHalfWidthAscii("ｐａｓｓ！＠") === "pass!@");
+check("保留 ASCII 符号与空格", T.toHalfWidthAscii("P@ss word-1") === "P@ss word-1");
+check("纯中文被清空", T.toHalfWidthAscii("中文密码") === "");
+check("设置框接了输入阶段规整", raw.includes('asciiOnlyInput($("adminPassInput")'));
 
 
 // ---- 场景 1：账号卡片渲染（查看器不再展示路由冷却/停用状态） ----

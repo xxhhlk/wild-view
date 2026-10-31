@@ -1362,21 +1362,30 @@ function closeSettings() {
   $("settingsOverlay").classList.add("hidden");
 }
 
-// stripAscii 去掉不可打印 ASCII 之外的字符（中文、全角、带重音字母等）。
-// 管理密码只允许 0x20–0x7E：输入法状态不同会产出不同码位，留到保存时再报错太晚。
-function stripAscii(v) {
-  return String(v == null ? "" : v).replace(/[^\x20-\x7e]/g, "");
+// toHalfWidthAscii 规整输入：全角 ！～（U+FF01–U+FF5E）与全角空格自动折成半角，
+// 其余非 ASCII（中文、假名、带重音字母）直接丢弃。
+// 折而不丢：全角/半角由输入法状态决定，同一个键位两种码位，没必要为此打断输入。
+function toHalfWidthAscii(v) {
+  const s = String(v == null ? "" : v);
+  let out = "";
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (c >= 0xff01 && c <= 0xff5e) { out += String.fromCharCode(c - 0xfee0); continue; }
+    if (c === 0x3000) { out += " "; continue; }
+    if (c >= 0x20 && c <= 0x7e) { out += ch; }
+  }
+  return out;
 }
 
-// asciiOnlyInput 让输入框只保留可打印 ASCII。
-// 组合输入（拼音候选）期间不干预，compositionend / input 时再清理，避免打断输入法；
-// 粘贴同样兜底。被过滤时回调一次，供调用方提示。
+// asciiOnlyInput 让输入框只保留半角可打印 ASCII。
+// 组合输入（拼音候选）期间不干预，compositionend / input 时再规整，避免打断输入法；
+// 粘贴同样兜底。被改动过时回调一次，供调用方提示。
 function asciiOnlyInput(el, onFiltered) {
   if (!el) return;
   let composing = false;
   const clean = () => {
     const v = el.value;
-    const next = stripAscii(v);
+    const next = toHalfWidthAscii(v);
     if (next === v) return;
     const pos = el.selectionStart == null ? next.length : el.selectionStart;
     const shift = v.length - next.length;
@@ -1558,13 +1567,13 @@ function bind() {
   $("btnClearAdminPass").onclick = clearAdminPassword;
   $("btnAdminLogin").onclick = submitLogin;
   $("adminLoginPass").onkeydown = (e) => { if (e.key === "Enter") submitLogin(); };
-  // 设置新密码时就过滤非 ASCII（登录框不过滤：老配置若已有非 ASCII 密码，仍要能登进来）。
+  // 设置新密码时即时规整（登录框不过滤：老配置若已有非 ASCII 密码，仍要能登进来）。
   let asciiHintAt = 0;
   asciiOnlyInput($("adminPassInput"), () => {
     const now = Date.now();
     if (now - asciiHintAt < 3000) return;
     asciiHintAt = now;
-    toast("已过滤非 ASCII 字符：管理密码只能使用英文、数字和半角符号");
+    toast("全角已自动转半角；中文等非 ASCII 字符已过滤（仅支持英文、数字、半角符号）");
   });
 
   // 顶栏齿轮进入统一设置（点击地址/Key 文本仍为复制）
