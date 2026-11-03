@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	logingemini "wild-view/internal/login_gemini"
-	loginqwenwork "wild-view/internal/login_qwenwork"
 	"wild-view/internal/provider"
 )
 
@@ -28,7 +27,7 @@ func TestManualCallbackKindWhitelist(t *testing.T) {
 		provider.CodeArts:   true, // portal 只接受 port 参数，跳转目标写死回环
 		provider.LobsterAI:  true, // redirect_uri 回环 + 回调口绝不监听非环回
 		provider.TraeWork:   true, // 回调写死 127.0.0.1 随机端口 + 5 分钟监听寿命（issue #98）
-		provider.QwenWork:   true, // PKCE(Hydra) 回环回调，redirect_uri 白名单制不可改
+		provider.QwenWork:   false, // 设备流（/device/selectAccounts + deviceToken/poll），无回调
 		provider.Gemini:     true, // installed-app 政策限 redirect host 为 localhost，不可改
 		provider.GLM:        false, // 网关侧 CDP 捕获
 		provider.Raccoon:    false, // 网关侧 CDP 捕获
@@ -42,20 +41,11 @@ func TestManualCallbackKindWhitelist(t *testing.T) {
 	}
 }
 
-// TestGeminiQwenWorkPasteEndpoint 粘贴白名单接线验证：qwenwork/gemini 纳入后
-// 不得出现「白名单 true 但 handler 不认」的半接线（真实 code 兑换链路已在各包测试覆盖）。
-func TestGeminiQwenWorkPasteEndpoint(t *testing.T) {
-	for _, kind := range []provider.Kind{provider.QwenWork, provider.Gemini} {
-		if !manualCallbackKind(kind) {
-			t.Fatalf("%s 应在粘贴白名单内", kind)
-		}
-	}
-	// 白名单内但无登录流程：直接走 SubmitCallbackURL 语义验证（不起 HTTP server——
-	// HandleAPI 的 guardMux 依赖完整 App 装配（cfg/session），空 App 会 panic）。
-	// qwenwork 的 pending 是包级内存，无流程时提交合法 code 也会被收下（与真实
-	// 「回调先到」一致）；这里验证 error 形态能正确传导即可。
-	if err := loginqwenwork.SubmitCallbackURL("http://127.0.0.1:8080/callback?error=access_denied"); err == nil {
-		t.Fatal("qwenwork error 回调应报错")
+// TestGeminiPasteEndpoint 粘贴白名单接线验证：gemini 纳入后
+// 不得出现「白名单 true 但 handler 不认」的半接线（真实 code 兑换链路已在包内测试覆盖）。
+func TestGeminiPasteEndpoint(t *testing.T) {
+	if !manualCallbackKind(provider.Gemini) {
+		t.Fatalf("%s 应在粘贴白名单内", provider.Gemini)
 	}
 	if err := logingemini.SubmitCallbackURL("http://localhost:1/oauth-callback?code=x&state=y"); err == nil {
 		t.Fatal("gemini 无会话时应报「没有进行中的登录流程」")

@@ -884,7 +884,7 @@ let pendingAction = "login";
 // 无手动签到渠道的登录提示差异文案（国际版会自动领日活奖励）。
 const NO_CHECKIN_LOGIN_HINT = {
   workbuddyai: "（无需手动签到，定时自动对话保活并领取日活奖励）",
-  qwenwork: "（网页登录常被上游限制拦下；推荐「从桌面端导入」，直接读取本机已登录客户端的凭据）",
+  qwenwork: "（网页授权走设备流，确认设备后自动完成；也可「从桌面端导入」）",
   raccoon: "（支持「网页版登录」与「从客户端导入」两种方式；access_token 约 1 小时，本工具会自动续期，上游刷新时会轮换 refresh_token）",
   loomy: "（凭据来自本机已登录的 Loomy 客户端；上游无续期接口，约 14 天后需重新登录并再次导入）",
   monkeycode: "（凭据来自本机已登录的 MonkeyCode 客户端；上游无续期接口，客户端重新登录后需再次导入）",
@@ -952,25 +952,23 @@ function promptLogin(channel) {
     return;
   }
 
-  // 千问办公：网页 OAuth 已被上游堵死（官方回调白名单 + 登录页把 client_id 当
-  // X-OAuth-Source 上报且限 32 字符），所以**主按钮直接是「从桌面端导入」**，
-  // 网页登录降级为次按钮，只在上游放宽后才需要。
+  // 千问办公：授权走「设备流」——浏览器打开 /device/selectAccounts，网关自己发起 OAuth，
+  // 登录完成后由网关回调页把设备流标记为已批准，后端轮询 deviceToken/poll 拿凭据
+  // （与桌面端同一条流程）。不依赖本机回调端口，所以远程/局域网面板也能自动完成。
   if (channel === "qwenwork") {
-    pendingAction = "import";
+    pendingAction = "login";
     $("lcTitle").textContent = "添加 千问办公 账号";
-    $("lcMsg").innerHTML = `将读取本机已登录的千问办公桌面端凭据并保存到 wild-view（不会修改客户端本身）。`
-      + `若提示未找到凭据或桌面端未登录，请先打开并登录桌面端后重试。`
+    $("lcMsg").innerHTML = `点击「登录千问办公」会打开授权页：登录完成后浏览器会跳到官方回调页`
+      + `（页面提示成功即可关掉），本工具会自动完成添加，<b>无需复制任何东西</b>。`
       + `<div class="glm-warn" style="margin-top:10px">`
-      + `<div class="glm-warn-title">⚠️ 网页登录已被上游限制</div>`
-      + `千问办公的授权页只接受官方客户端回调，且登录页会把客户端 ID 当 <code>X-OAuth-Source</code> 上报（限 32 字符），`
-      + `自建授权流程会被拦下（<code>redirect_uri does not match</code> / <code>INVALID_OAUTH_CALLBACK</code> / <code>bad-request</code>）。`
-      + `「尝试网页登录」只在上游放宽后才有用。`
+      + `<div class="glm-warn-title">也可以直接读桌面端</div>`
+      + `若浏览器授权走不通，点「从桌面端导入」直接读取本机已登录的千问办公桌面端凭据（仅 Windows）。`
       + `</div>`;
-    $("btnLoginConfirm").textContent = "从桌面端导入";
+    $("btnLoginConfirm").textContent = "登录千问办公";
     const qwAlt = $("btnLoginAlt");
-    qwAlt.textContent = "尝试网页登录";
+    qwAlt.textContent = "从桌面端导入";
     qwAlt.classList.remove("hidden");
-    qwAlt.onclick = () => { pendingAction = "login"; confirmLogin(); };
+    qwAlt.onclick = () => { pendingAction = "import"; confirmLogin(); };
     $("loginConfirmOverlay").classList.remove("hidden");
     return;
   }
