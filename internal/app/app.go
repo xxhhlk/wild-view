@@ -1282,13 +1282,12 @@ func (a *App) completeLogin(r login.Result) {
 	a.afterAccountAdded(provider.WorkBuddy)
 	a.safeGo(func() {
 		rt := a.runtime(provider.WorkBuddy)
-		if rt == nil || rt.Scheduler == nil {
-			return
-		}
-		if res, err := rt.Scheduler.CheckinAccount(r.UID); err != nil {
-			log.Printf("新账号签到失败 %s: %v", r.Nickname, err)
-		} else {
-			log.Printf("新账号签到完成 %s：%s", r.Nickname, res.Msg)
+		if a.CheckinEnabled() && rt != nil && rt.Scheduler != nil {
+			if res, err := rt.Scheduler.CheckinAccount(r.UID); err != nil {
+				log.Printf("新账号签到失败 %s: %v", r.Nickname, err)
+			} else {
+				log.Printf("新账号签到完成 %s：%s", r.Nickname, res.Msg)
+			}
 		}
 		// 积分兜底：签到路径失败（余额查询失败/签到异常）时 pool 内 credits 仍为 0，
 		// 独立刷一次保证新账号首屏正确（幂等：多刷无害）。
@@ -1444,13 +1443,12 @@ func (a *App) completeTraeLogin(r logintrae.Result) {
 	a.afterAccountAdded(provider.TraeWork)
 	a.safeGo(func() {
 		rt := a.runtime(provider.TraeWork)
-		if rt == nil || rt.Scheduler == nil {
-			return
-		}
-		if res, err := rt.Scheduler.CheckinAccount(r.UID); err != nil {
-			log.Printf("TraeWork 新账号签到失败 %s: %v", r.Nickname, err)
-		} else {
-			log.Printf("TraeWork 新账号签到完成 %s：%s", r.Nickname, res.Msg)
+		if a.CheckinEnabled() && rt != nil && rt.Scheduler != nil {
+			if res, err := rt.Scheduler.CheckinAccount(r.UID); err != nil {
+				log.Printf("TraeWork 新账号签到失败 %s: %v", r.Nickname, err)
+			} else {
+				log.Printf("TraeWork 新账号签到完成 %s：%s", r.Nickname, res.Msg)
+			}
 		}
 		// 积分兜底（对齐 workbuddy）：签到路径失败时 pool 内 credits 仍为 0
 		if _, err := a.RefreshCredits(r.UID); err != nil {

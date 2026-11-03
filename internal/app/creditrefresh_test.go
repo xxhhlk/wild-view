@@ -10,13 +10,17 @@ import (
 
 	"wild-view/internal/auth"
 	"wild-view/internal/config"
+	"wild-view/internal/login"
+	logintrae "wild-view/internal/login_trae"
 	"wild-view/internal/pool"
 	"wild-view/internal/provider"
+	"wild-view/internal/scheduler"
 )
 
 // fakeUpstream 只实现 UserResource / RefreshToken，其余为空实现。
 type fakeUpstream struct {
 	resourceCalls atomic.Int32
+	checkinCalls  atomic.Int32
 	remain        int64
 	failResource  atomic.Bool
 	// sessionDead 为 true 时 UserResourceDetail 先报一次 401（模拟本地 token 已失效），
@@ -58,7 +62,10 @@ func (f *fakeUpstream) UserResourceDetail(a *auth.Auth) (int64, []provider.Resou
 	return f.remain, []provider.ResourceItem{{Name: "套餐", Remain: f.remain, Usable: true}}, nil
 }
 
-func (f *fakeUpstream) DailyCheckin(a *auth.Auth) error { return nil }
+func (f *fakeUpstream) DailyCheckin(a *auth.Auth) error {
+	f.checkinCalls.Add(1)
+	return nil
+}
 
 // newTestApp 构造仅含单个渠道的最小 App。
 func newTestApp(t *testing.T, kind provider.Kind, up provider.Upstream, uid string) (*App, *pool.Pool) {
@@ -83,6 +90,57 @@ func newTestApp(t *testing.T, kind provider.Kind, up provider.Upstream, uid stri
 	}
 	t.Cleanup(a.Close)
 	return a, p
+}
+
+func TestLoginCheckinRespectsSwitchAndRefreshesCredits(t *testing.T) {
+	for _, kind := range []provider.Kind{provider.WorkBuddy, provider.TraeWork} {
+		for _, enabled := range []bool{false, true} {
+			name := kind.String() + "/disabled"
+			if enabled {
+				name = kind.String() + "/enabled"
+			}
+			t.Run(name, func(t *testing.T) {
+				const uid = "login-test"
+				up := &fakeUpstream{remain: 347}
+				a, p := newTestApp(t, kind, up, uid)
+				rt := a.runtime(kind)
+				rt.Scheduler = scheduler.New(scheduler.Config{Pool: p, Upstream: up})
+				if err := a.SetCheckinEnabled(enabled); err != nil {
+					t.Fatalf("设置签到开关: %v", err)
+				}
+				if kind == provider.WorkBuddy {
+					a.completeLogin(login.Result{UID: uid, AccessToken: "token", RefreshToken: "refresh", ExpiresIn: 86400})
+				} else {
+					a.completeTraeLogin(logintrae.Result{UID: uid, AccessToken: "token", RefreshToken: "refresh", ExpiresAt: time.Now().Add(24 * time.Hour).Unix()})
+				}
+
+				// 开启时签到本身会查询余额，还要等登录后的独立余额刷新完成。
+				wantResources := int32(1)
+				wantCheckins := int32(0)
+				if enabled {
+					wantResources = 2
+					wantCheckins = 1
+				}
+				deadline := time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					st, ok := p.Status(uid)
+					if ok && st.Credits == 347 && up.resourceCalls.Load() >= wantResources {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if st, ok := p.Status(uid); !ok || st.Credits != 347 {
+					t.Errorf("登录后余额未刷新: ok=%v credits=%d", ok, st.Credits)
+				}
+				if got := up.resourceCalls.Load(); got < wantResources {
+					t.Errorf("余额查询次数=%d，至少需要 %d 次", got, wantResources)
+				}
+				if got := up.checkinCalls.Load(); got != wantCheckins {
+					t.Errorf("签到调用次数=%d，期望 %d", got, wantCheckins)
+				}
+			})
+		}
+	}
 }
 
 // TestCreditAutoRefreshRunsImmediatelyAndPeriodically 启动即刷一次，之后按间隔重复。

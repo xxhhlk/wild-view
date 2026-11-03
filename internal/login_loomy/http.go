@@ -77,13 +77,13 @@ func buildAccountBody(param map[string]any) map[string]any {
 //
 // ⚠️ body **只序列化一次**，签名与发送共用同一个 []byte —— 这是签名能通过的前提
 // （二次序列化会改变字节：键序/空格）。
-func postAccount(client *http.Client, path string, body map[string]any) (json.RawMessage, []byte, error) {
+func postAccount(client *http.Client, path string, body map[string]any) (accountEnvelope, []byte, error) {
 	if client == nil {
 		client = NewClient()
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, err
+		return accountEnvelope{}, nil, err
 	}
 	serialized := string(raw)
 
@@ -94,7 +94,7 @@ func postAccount(client *http.Client, path string, body map[string]any) (json.Ra
 
 	req, err := http.NewRequest(http.MethodPost, accountBase+path, bytes.NewReader(raw))
 	if err != nil {
-		return nil, nil, err
+		return accountEnvelope{}, nil, err
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -104,7 +104,7 @@ func postAccount(client *http.Client, path string, body map[string]any) (json.Ra
 	resp, err := client.Do(req)
 	if err != nil {
 		// 传输层失败：不把底层 error 原文原样透出（可能含 URL/请求细节，且对用户没帮助）。
-		return nil, nil, fmt.Errorf("无法连接讯飞账号服务（%s）：请检查网络后重试", path)
+		return accountEnvelope{}, nil, fmt.Errorf("无法连接讯飞账号服务（%s）：请检查网络后重试", path)
 	}
 	defer resp.Body.Close()
 
@@ -112,21 +112,15 @@ func postAccount(client *http.Client, path string, body map[string]any) (json.Ra
 
 	var env accountEnvelope
 	if err := json.Unmarshal(respRaw, &env); err != nil {
-		return nil, nil, fmt.Errorf("讯飞账号服务响应不是 JSON（%s，HTTP %d）", path, resp.StatusCode)
-	}
-	if !env.ok() {
-		// 账号端点的鉴权/业务错误码一律透传 desc：上层据文案判断
-		// 「验证码错误」「手机号格式不对」「频率限制」（ofm loomy-oauth.ts:117-120 同款）。
-		//
-		// ⚠️ 只透传上游声明的 desc，**不透传响应体原文**：这些文案会经 app.pollLogin 进日志，
-		// 且 desc 里若意外回显了 token 也必须被吃掉（见 redact）。
-		return nil, nil, errors.New(redact(env.message()))
+		return accountEnvelope{}, nil, fmt.Errorf("讯飞账号服务响应不是 JSON（%s，HTTP %d）", path, resp.StatusCode)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, nil, fmt.Errorf("讯飞账号服务返回 HTTP %d（%s）", resp.StatusCode, path)
+		if !env.ok() {
+			return accountEnvelope{}, nil, errors.New(redact(env.message()))
+		}
+		return accountEnvelope{}, nil, fmt.Errorf("讯飞账号服务返回 HTTP %d（%s）", resp.StatusCode, path)
 	}
-	// 同时回整包：msgid 有可能发在响应顶层而不是 data 里（见 sendCode 的三处兜底）。
-	return env.Data, respRaw, nil
+	return env, respRaw, nil
 }
 
 // sendCode 下发短信验证码，返回 msgid。
@@ -136,13 +130,18 @@ func (s *session) sendCode(client *http.Client, phone string) (string, error) {
 		"phone":  phone,
 		"expire": smsCodeTTLSeconds,
 	})
-	data, raw, err := postAccount(client, epSendCode, body)
+	env, raw, err := postAccount(client, epSendCode, body)
 	if err != nil {
 		// 不置终态：见 `noteSendFail` 注释（#173 缺陷 A）。
 		s.noteSendFail(redact("下发短信验证码失败：" + err.Error()))
 		return "", err
 	}
-	msgID := pickMsgID(data, raw)
+	msgID := pickMsgID(env.Data, raw)
+	if msgID == "" && !env.ok() {
+		err := errors.New(redact(env.message()))
+		s.noteSendFail(redact("下发短信验证码失败：" + err.Error()))
+		return "", err
+	}
 	if msgID == "" {
 		// 不返回空串：上层会拿它去登录，服务端必然报「msgid 无效」，
 		// 用户看到的将是一个与真实原因无关的错误（ofm loomy-oauth.ts:145-149 原话）。
@@ -204,16 +203,19 @@ func (s *session) login(client *http.Client, phone, code, msgid string) (Result,
 		"msgid":  msgid,
 		"expire": sessionTTLSeconds,
 	})
-	data, _, err := postAccount(client, epCheckCode, body)
+	env, _, err := postAccount(client, epCheckCode, body)
 	if err != nil {
 		// ⚠️ 不置终态失败：验证码输错是常态，用户要能就地重试（ofm 同款）。
 		return Result{}, err
+	}
+	if !env.ok() {
+		return Result{}, errors.New(redact(env.message()))
 	}
 	var m struct {
 		Session string `json:"session"`
 		UserID  string `json:"userid"`
 	}
-	_ = json.Unmarshal(data, &m)
+	_ = json.Unmarshal(env.Data, &m)
 	sess := strings.TrimSpace(m.Session)
 	if sess == "" {
 		return Result{}, errors.New(redact("登录响应缺少 session（上游协议可能已变化）"))
