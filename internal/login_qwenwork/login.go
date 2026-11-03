@@ -2,18 +2,17 @@
 // PKCE(S256) + Ory Hydra 授权码流，本机 HTTP 回调收 code 后本地兑换 token。
 //
 // 链路（逆向自 ref/qwenwork_auth_20260919.saz，见备忘 §9）：
-//  1. Start：生成 PKCE + state，起本机回调 server（随机端口），
-//     返回授权 URL（client_id=qwenwork-desktop-app，redirect_uri=http://127.0.0.1:<port>/callback）。
-//     实测 Hydra 接受本机 http 回调与自造 state（备忘 §9.3 测 1）。
-//  2. 用户在系统浏览器打开授权 URL：
-//     - 浏览器已有千问办公 session → 自动跳转本机回调（QR 都不用扫）
-//     - 未登录 → 浏览器展示 QR/手机号登录页，用户操作后自动跳回
-//  3. 本机回调收 ?code=... → 立即用 code_verifier 兑换 token（Hydra 标准 /oauth2/token，
-//     public client 无 secret），随后关闭回调 server。
-//  4. Poll 兜底：与其它渠道一致的轮询语义（检查回调结果文件），供 app.pollLogin 调用。
+//  1. Start：生成 PKCE + state，返回授权 URL（client_id=qwenwork-desktop-app，
+//     redirect_uri 固定为官方值 https://gateway.qwenwork.cn/oauth/callback）。
+//  2. 用户在系统浏览器打开授权 URL 并完成登录，浏览器跳到官方回调页；
+//     该页属于官方客户端，本工具收不到回调，故由用户把地址栏 URL 粘回面板
+//     （POST /api/login/callback → SubmitCallbackURL）。
+//  3. 解析出 code 后用 code_verifier 兑换 token（Hydra 标准 /oauth2/token，
+//     public client 无 secret）；redirect_uri 必须与授权时完全一致。
+//  4. Poll：轮询 pending 通道，成功即写凭据。
 //
-// 注意：桌面 IDE 官方 redirect_uri 是 https://gateway.qwenwork.cn/oauth/callback
-// （桌面进程内兑换），本工具改用本机回调自兑——token 等价（同 client_id/scope）。
+// 历史：2026-11 之前服务端接受任意 127.0.0.1 回环回调，本工具曾用本机随机端口
+// 自动收码；上游收紧白名单后回环地址一律 invalid_request，只能改走官方回调 + 粘贴。
 package login_qwenwork
 
 import (
@@ -24,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,6 +37,9 @@ const (
 	OAuthBase   = "https://qwenwork.cn"
 	TokenURL    = OAuthBase + "/oauth2/token"
 	ClientID    = "qwenwork-desktop-app"
+	// OfficialRedirect 官方桌面端注册的回调地址。服务端按白名单精确匹配，
+	// 自建回环地址（http://127.0.0.1:<port>/callback）会被拒为 invalid_request。
+	OfficialRedirect = "https://gateway.qwenwork.cn/oauth/callback"
 	Scope       = "openid profile email offline_access qwen_work"
 	callbackTTL = 5 * time.Minute // 本机回调 server 最长等待
 )
@@ -74,12 +75,7 @@ type pendingCode struct {
 	received bool
 }
 
-var (
-	pending     = &pendingCode{}
-	callbackSrv *http.Server
-	callbackLn  net.Listener
-	srvOnce     sync.Once
-)
+var pending = &pendingCode{}
 
 // SubmitCallbackURL 手动提交浏览器跳转后的回调地址（远程/局域网面板的粘贴兜底入口）。
 //
@@ -128,17 +124,11 @@ func NewClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
-// Start 发起登录：生成 PKCE、起本机回调、返回授权 URL。
+// Start 发起登录：生成 PKCE 与 state，返回授权 URL。
+// 回调固定走官方地址，本机不再监听端口——授权码由用户粘贴回面板。
 func Start(_ *http.Client, statePath string) (string, error) {
 	verifier, challenge := makePKCE()
-
-	// 本机回调：随机空闲端口
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", fmt.Errorf("listen callback: %w", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	redirectURI := OfficialRedirect
 
 	authURL := fmt.Sprintf("%s/oauth2/auth?client_id=%s&code_challenge=%s&code_challenge_method=S256&redirect_uri=%s&response_type=code&scope=%s&state=%s",
 		OAuthBase, ClientID, challenge,
@@ -147,45 +137,11 @@ func Start(_ *http.Client, statePath string) (string, error) {
 		uuid4Hex(), // state 服务端只透传，无需承载内容
 	)
 
-	st := state{Verifier: verifier, RedirectURI: redirectURI, CallbackPort: port, AuthURL: authURL, CreatedAt: time.Now().Unix()}
+	st := state{Verifier: verifier, RedirectURI: redirectURI, AuthURL: authURL, CreatedAt: time.Now().Unix()}
 	if err := writeState(statePath, st); err != nil {
-		_ = ln.Close()
 		return "", err
 	}
-
-	// 起回调 server（异步等 code）
 	pending.reset()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		q := r.URL.Query()
-		if e := q.Get("error"); e != "" {
-			desc := q.Get("error_description")
-			if desc == "" {
-				desc = e
-			} else {
-				desc = desc + " (" + e + ")"
-			}
-			pending.fail(desc)
-			_, _ = io.WriteString(w, callbackPage(false, desc))
-			return
-		}
-		code := q.Get("code")
-		if code == "" {
-			pending.fail("回调缺少 code 参数")
-			_, _ = io.WriteString(w, callbackPage(false, "回调缺少 code 参数"))
-			return
-		}
-		pending.set(code)
-		// 注意：此时尚未完成 code 兑换（Poll 每 2s 轮询兑换），页面文案用「已收到授权」
-		// 而非「登录成功」，避免兑换失败时误导；1.5s 自动关闭不变。
-		_, _ = io.WriteString(w, callbackPage(true, ""))
-	})
-	callbackLn = ln
-	callbackSrv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = callbackSrv.Serve(ln) }()
-	srvOnce = sync.Once{} // 允许下次登录重新 Start
-
 	return authURL, nil
 }
 
@@ -263,14 +219,10 @@ func Poll(client *http.Client, statePath string) (Result, error) {
 	return res, nil
 }
 
-// Shutdown 关闭回调 server（登录结束/超时/取消时调用）。
+// Shutdown 清理登录残留状态（登录结束/超时/取消时调用）。
+// 本机回调 server 已移除，这里只保留调用契约，避免上层改线。
 func Shutdown() {
-	srvOnce.Do(func() {})
-	if callbackSrv != nil {
-		_ = callbackSrv.Close()
-		callbackSrv = nil
-		callbackLn = nil
-	}
+	pending.reset()
 }
 
 // ---------------------------------------------------------------------------

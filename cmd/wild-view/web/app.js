@@ -996,6 +996,21 @@ function confirmLogin() {
   else startLogin(pendingChannel, loginLabelValue());
 }
 
+// submitLoginCallback 提交手动回调地址（manual_callback 渠道）。
+// 只把 URL 交给后端解析 code，凭据仍由后端兑换，前端不接触 token。
+async function submitLoginCallback() {
+  const raw = $("lcCallbackUrl").value.trim();
+  if (!raw) { $("lcCallbackErr").textContent = "请先粘贴登录后浏览器地址栏里的完整地址"; return; }
+  try {
+    await api("/api/login/callback", { url: raw });
+    $("lcCallbackErr").textContent = "";
+    $("lcCallbackUrl").value = "";
+    $("loginMsg").textContent = "已收到授权码，正在兑换凭据…";
+  } catch (e) {
+    $("lcCallbackErr").textContent = e.message || "提交失败";
+  }
+}
+
 // importLocal 从本机已登录的官方客户端导入凭据（小浣熊 / Loomy / MonkeyCode）。
 // note 只在有降级时非空（如某个凭据文件没读到）—— 必须显示出来，
 // 否则用户只看到"已导入成功"，等积分不显示时才发现。
@@ -1021,6 +1036,15 @@ async function startOfficeAceWebLogin() {
     $("loginTitle").textContent = "添加 OfficeAce 账号";
     $("loginMsg").textContent = "已在浏览器打开华为云授权页，请在其中登录并授权；完成后本工具会自动捕获凭据。"
       + "若浏览器未自动打开，可点「复制链接」手动打开。";
+    // manual_callback：授权回调落在官方域名（本机收不到），需要用户把地址栏 URL 粘回来。
+    const needPaste = !!r.manual_callback;
+    $("lcCallbackRow").classList.toggle("hidden", !needPaste);
+    $("lcCallbackErr").textContent = "";
+    if (needPaste) {
+      $("loginMsg").textContent = `已在浏览器打开${chLabel(channel)}授权页，请完成登录。`
+        + `登录后浏览器会跳到官方回调页（页面可能显示错误或空白，属正常），`
+        + `把地址栏里的完整地址复制到下方并提交。`;
+    }
     $("loginOverlay").classList.remove("hidden");
     $("btnCopyUrl").dataset.url = url;
     if (r.warning) toast(r.warning, 6000);
@@ -1077,6 +1101,15 @@ function showOpenLink(url) {
   a.href = url;
   a.classList.remove("hidden");
 }
+function resetLoginPaste() {
+  const row = $("lcCallbackRow");
+  if (row) row.classList.add("hidden");
+  const inp = $("lcCallbackUrl");
+  if (inp) inp.value = "";
+  const err = $("lcCallbackErr");
+  if (err) err.textContent = "";
+}
+
 function hideOpenLink() {
   const a = $("lcOpenLink");
   if (a) a.classList.add("hidden");
@@ -1142,6 +1175,7 @@ async function cancelLogin() {
     if (oaPoll) { cancelOfficeAceLogin(); }
     await api("/api/login/cancel", {});
     stopLoginPoll();
+    resetLoginPaste();
     $("loginOverlay").classList.add("hidden");
     toast("登录已取消");
   } catch (e) { toast(e.message); }
@@ -1162,6 +1196,7 @@ function startLoginPoll() {
       const st = await api("/api/state");
       if (!st.login_busy) {
         stopLoginPoll();
+        resetLoginPaste();
         $("loginOverlay").classList.add("hidden");
         toast("登录完成，正在同步账号…");
         await loadState();
@@ -1545,6 +1580,8 @@ function bind() {
     closeTimeEditor();
   });
   $("btnCopyUrl").onclick = copyUrl;
+  $("btnSubmitCallback").onclick = submitLoginCallback;
+  $("lcCallbackUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") submitLoginCallback(); });
   $("btnCancelLogin").onclick = cancelLogin;
   $("btnRefreshFees").onclick = refreshFees;
   // 模型查找面板（纯前端）：入口按钮 + 关闭 + 输入即过滤 + 结果点击复制完整 ID。
