@@ -1,8 +1,12 @@
 name: Build Release
 
 on:
-  # 仅手动触发：Actions 页面 → Run workflow → 构建 + 发布 dev pre-release
-  # （原 push tags v* 自动触发已移除，避免推 tag 时自动跑构建）
+  # 推 v* 标签 → 验证 + 三平台构建 + 发布正式 release
+  # （release note 取 RELEASES.md 中 `# wild-view <tag>` 段落，缺失时回退自动生成）
+  push:
+    tags:
+      - 'v*'
+  # 手动触发：Actions 页面 → Run workflow → 只更新 dev-build 预发布，便于自测
   workflow_dispatch:
 
 jobs:
