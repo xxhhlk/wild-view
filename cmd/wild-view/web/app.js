@@ -1,4 +1,4 @@
-// wild-work 管理面板前端（原生 JS，无构建步骤，直接 fetch 管理 API）
+// wild-view 管理面板前端（原生 JS，无构建步骤，直接 fetch 管理 API）
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -884,7 +884,7 @@ let pendingAction = "login";
 // 无手动签到渠道的登录提示差异文案（国际版会自动领日活奖励）。
 const NO_CHECKIN_LOGIN_HINT = {
   workbuddyai: "（无需手动签到，定时自动对话保活并领取日活奖励）",
-  qwenwork: "（每日积分服务端 00:00 自动发放；若浏览器已登录千问办公则全自动完成，否则需扫码一次）",
+  qwenwork: "（网页登录常被上游限制拦下；推荐「从桌面端导入」，直接读取本机已登录客户端的凭据）",
   raccoon: "（支持「网页版登录」与「从客户端导入」两种方式；access_token 约 1 小时，本工具会自动续期，上游刷新时会轮换 refresh_token）",
   loomy: "（凭据来自本机已登录的 Loomy 客户端；上游无续期接口，约 14 天后需重新登录并再次导入）",
   monkeycode: "（凭据来自本机已登录的 MonkeyCode 客户端；上游无续期接口，客户端重新登录后需再次导入）",
@@ -952,6 +952,29 @@ function promptLogin(channel) {
     return;
   }
 
+  // 千问办公：网页 OAuth 已被上游堵死（官方回调白名单 + 登录页把 client_id 当
+  // X-OAuth-Source 上报且限 32 字符），所以**主按钮直接是「从桌面端导入」**，
+  // 网页登录降级为次按钮，只在上游放宽后才需要。
+  if (channel === "qwenwork") {
+    pendingAction = "import";
+    $("lcTitle").textContent = "添加 千问办公 账号";
+    $("lcMsg").innerHTML = `将读取本机已登录的千问办公桌面端凭据并保存到 wild-view（不会修改客户端本身）。`
+      + `若提示未找到凭据或桌面端未登录，请先打开并登录桌面端后重试。`
+      + `<div class="glm-warn" style="margin-top:10px">`
+      + `<div class="glm-warn-title">⚠️ 网页登录已被上游限制</div>`
+      + `千问办公的授权页只接受官方客户端回调，且登录页会把客户端 ID 当 <code>X-OAuth-Source</code> 上报（限 32 字符），`
+      + `自建授权流程会被拦下（<code>redirect_uri does not match</code> / <code>INVALID_OAUTH_CALLBACK</code> / <code>bad-request</code>）。`
+      + `「尝试网页登录」只在上游放宽后才有用。`
+      + `</div>`;
+    $("btnLoginConfirm").textContent = "从桌面端导入";
+    const qwAlt = $("btnLoginAlt");
+    qwAlt.textContent = "尝试网页登录";
+    qwAlt.classList.remove("hidden");
+    qwAlt.onclick = () => { pendingAction = "login"; confirmLogin(); };
+    $("loginConfirmOverlay").classList.remove("hidden");
+    return;
+  }
+
   // CodeArts（华为云）：授权页必须避开日常浏览器里的华为云登录态（否则永远被授权成已登录的
   // 那个账号），后端用**无痕窗口**打开；同时要用户填「账号标识」区分多个华为账号。
   if (channel === "codearts") {
@@ -973,7 +996,7 @@ function promptLogin(channel) {
   // 纯导入型渠道：文案与动作都不同（读本机客户端凭据，而不是打开浏览器登录）。
   if (isImportLocal(channel)) {
     $("lcTitle").textContent = "导入 " + name + " 账号";
-    $("lcMsg").textContent = `将读取本机已登录的${name}客户端凭据并保存到 wild-work（不会修改客户端本身）。`
+    $("lcMsg").textContent = `将读取本机已登录的${name}客户端凭据并保存到 wild-view（不会修改客户端本身）。`
       + `若提示未找到凭据，请先打开并登录${name}客户端后重试。${NO_CHECKIN_LOGIN_HINT[channel] || ""}`;
     $("btnLoginConfirm").textContent = "导入";
     $("loginConfirmOverlay").classList.remove("hidden");
@@ -1210,7 +1233,7 @@ function stopLoginPoll() {
 }
 
 // ---------- 智谱清言登录（自动捕获 Cookie，手工粘贴为兜底） ----------
-// 自动路径：wild-work 拉起独立 profile 的浏览器 → 用户正常登录 → CDP 捕获 Cookie。
+// 自动路径：wild-view 拉起独立 profile 的浏览器 → 用户正常登录 → CDP 捕获 Cookie。
 // 独立 profile 天然隔离，多账号逐个添加互不干扰（无需手动开无痕）。
 let glmPoll = null;
 

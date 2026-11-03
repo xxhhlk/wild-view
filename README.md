@@ -50,7 +50,7 @@
 | TraeCode | `traecode/*` | 复用 TraeWork 账号 | Trae 代码版（`function=solo_agent`），与 TraeWork 同一上游、共用账号 |
 | QoderCN | `qodercn/*` | 浏览器登录 | |
 | QoderCOM | `qodercom/*` | 浏览器登录 | Qoder 国际版 |
-| 千问办公 | `qwenwork/*` | 浏览器登录 | |
+| 千问办公 | `qwenwork/*` | 从桌面端导入 | 上游已收紧网页授权（官方回调白名单 + 登录页把 `client_id` 当 `X-OAuth-Source` 上报且限 32 字符），主按钮改为读本机千问办公桌面端凭据（Electron safeStorage + Windows DPAPI，仅 Windows）；access token 约 7 天，到期需在桌面端重新登录后再导入 |
 | MonkeyCode | `monkeycode/*` | 从客户端导入 | 平台托管模型 |
 | 小浣熊 | `raccoon/*` | 网页版自动登录（CDP）／从客户端导入 | 两条添加路径：主按钮拉起独立 profile 浏览器登录后经 CDP 捕获凭据（跨平台），次按钮复用本机客户端凭据 |
 | Loomy（讯飞） | `loomy/*` | 从客户端导入 | 导入型渠道：凭据从**本机已登录的官方客户端**读取；上游无 refresh 端点，session 约 14 天，到期需重新导入 |

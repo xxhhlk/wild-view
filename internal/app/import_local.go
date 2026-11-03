@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,14 +18,21 @@ import (
 	"wild-view/internal/monkeycode"
 	"wild-view/internal/officeace"
 	"wild-view/internal/provider"
+	"wild-view/internal/qwenwork"
 	"wild-view/internal/raccoon"
 )
 
-// 本文件实现「导入型」渠道的凭据获取：小浣熊（raccoon）与 Loomy。
+// 本文件实现「导入型」渠道的凭据获取：小浣熊（raccoon）、Loomy、MonkeyCode、
+// OfficeAce 与千问办公（qwenwork）。
 //
-// 为什么是导入而不是登录：两者的凭据都由各自官方客户端在本机维护
+// 为什么是导入而不是登录：凭据都由各自官方客户端在本机维护
 // （小浣熊 = %USERPROFILE%\.box-agent\config\auth.json 明文 JSON；
-//   Loomy = C:\Users\Public\Loomy\<hash>\userData\auth-session.json）。
+//   Loomy = C:\Users\Public\Loomy\<hash>\userData\auth-session.json；
+//   千问办公 = %APPDATA%\QwenWorkCN\auth-v2.dat，Electron safeStorage + DPAPI）。
+//
+// 千问办公**没有可用的网页登录**：官方 client_id 的回调白名单只认自家网关，
+// 动态注册（DCR）拿到的 client_id 又被登录页当 X-OAuth-Source 上报（限 32 字符），
+// 因此桌面端凭据导入是当前唯一稳定路径（详见 internal/qwenwork/import_local_windows.go）。
 //
 // 小浣熊另有一条**浏览器授权登录**路径（2026-09-23 落地，面板主按钮）：
 // /code/authorize → 浏览器登录 → 深链 office-raccoon://auth/callback?code=…
@@ -101,8 +109,71 @@ func (a *App) ImportLocalCredentials(channel string) (*ImportLocalResult, error)
 		return a.importMonkeyCode()
 	case provider.OfficeAce:
 		return a.importOfficeAce()
+	case provider.QwenWork:
+		return a.importQwenWork()
 	}
 	return nil, fmt.Errorf("渠道 %q 不支持本地导入（该渠道请用面板的登录按钮）", channel)
+}
+
+// importQwenWork 读取千问办公桌面端登录态（Electron safeStorage → DPAPI 解密）。
+//
+// 网页 OAuth 已不可用（官方 client_id 的回调白名单 + 登录页 X-OAuth-Source ≤32 字符），
+// 桌面端凭据是当前唯一稳定来源。access token 约 7 天，refresh token 可能已过期：
+// 过期时只能用到 access 到期，需在桌面端重新登录后再次导入。
+func (a *App) importQwenWork() (*ImportLocalResult, error) {
+	la, err := qwenwork.ImportLocal()
+	if err != nil {
+		return nil, err
+	}
+	doc := authDoc{
+		Auth: authSection{
+			AccessToken:  la.AccessToken,
+			RefreshToken: la.RefreshToken,
+			ExpiresAt:    la.ExpiresAt,
+			Domain:       "qwenwork.cn",
+			ApiHost:      "https://gateway.qwenwork.cn",
+		},
+		Account: accountSection{UID: la.UID, Nickname: la.Nickname},
+	}
+	file, err := a.writeAuthFile("qwenwork", la.UID, doc)
+	if err != nil {
+		return nil, err
+	}
+	a.reloadAccounts()
+	a.afterAccountAdded(provider.QwenWork)
+	// 新账号首次拉取余额（对齐各登录路径）：不主动刷则面板要等到下个自动刷新周期才有积分。
+	a.safeGo(func() {
+		if remain, err := a.RefreshCredits(la.UID); err != nil {
+			log.Printf("qwenwork 导入账号积分获取失败 uid=%s err=%v", la.UID, err)
+		} else {
+			log.Printf("qwenwork 导入账号积分获取完成 uid=%s remain=%d", la.UID, remain)
+		}
+	})
+
+	now := time.Now()
+	var parts []string
+	if la.ExpiresAt > 0 {
+		parts = append(parts, "access token 有效至 "+time.Unix(la.ExpiresAt, 0).Local().Format("01-02 15:04"))
+	}
+	// refresh 到期只陈述文件里的记录值：桌面端可能按「每次使用即顺延」维护它，
+	// 因此过期不等于一定续不上，只说明「续不上时该怎么办」。
+	refreshDead := la.RefreshToken == ""
+	switch {
+	case la.RefreshExpiresAt.IsZero():
+		parts = append(parts, "未取到 refresh token 有效期")
+	case la.RefreshExpiresAt.Before(now):
+		refreshDead = true
+		parts = append(parts, "refresh token 记录的有效期已过（"+la.RefreshExpiresAt.Local().Format("01-02 15:04")+"）")
+	default:
+		parts = append(parts, "refresh token 有效至 "+la.RefreshExpiresAt.Local().Format("01-02 15:04"))
+	}
+	if refreshDead {
+		parts = append(parts, "access token 到期后需在桌面端重新登录再导入")
+	}
+	return &ImportLocalResult{
+		Channel: "qwenwork", UID: la.UID, File: filepath.Base(file),
+		Note: strings.Join(parts, "；"),
+	}, nil
 }
 
 // importRaccoon 读取商汤小浣熊客户端的 auth.json 并转换成本工具格式。

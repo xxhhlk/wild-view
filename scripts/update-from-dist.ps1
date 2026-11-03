@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Deploy the newest dist build onto the running wild-work instance.
+  Deploy the newest dist build onto the running wild-view instance.
 
 .DESCRIPTION
   Compares the SHA256 of the build artifact in dist with the deployed instance
@@ -18,7 +18,7 @@
 
 .PARAMETER TargetExe
   Full path of the deployed instance binary. Default: executable path of the
-  running instance, or %USERPROFILE%\Downloads\wild-work-windows-amd64.exe.
+  running instance, or %USERPROFILE%\Downloads\wild-view-windows-amd64.exe.
 
 .PARAMETER ProcessName
   Process name (without .exe) of the running instance.
@@ -46,7 +46,7 @@
 param(
     [string] $DistDir,
     [string] $TargetExe,
-    [string] $ProcessName = 'wild-work-windows-amd64',
+    [string] $ProcessName = 'wild-view-windows-amd64',
     [string] $StartArgs,
     [int]    $Port = 7863,
     [switch] $NoBackup,
@@ -106,8 +106,8 @@ $targetLeaf = Split-Path -Leaf $target
 $candidates = @(
     (Join-Path $DistDir $targetLeaf),
     (Join-Path $DistDir ($ProcessName + '.exe')),
-    (Join-Path $DistDir 'wild-work-windows-amd64.exe'),
-    (Join-Path $DistDir 'wild-work.exe')
+    (Join-Path $DistDir 'wild-view-windows-amd64.exe'),
+    (Join-Path $DistDir 'wild-view.exe')
 )
 $source = $null
 foreach ($c in $candidates) {
