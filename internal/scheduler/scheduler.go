@@ -45,6 +45,16 @@ type Config struct {
 	// WorkBuddy 国际版使用该模式。
 	ActivitiesOnly bool
 
+	// NoScheduledCheckin 表示本渠道**没有定时签到**（无签到活动、或签到依赖对话）。
+	// 置 true 时 CheckinMinutes 被强制清空，且 SetCheckinMinutes 对它无效——
+	// 面板改签到时间不会把全局时刻灌进来。
+	//
+	// 为什么必须有这个标记（2026-11-03 实测）：无签到渠道原本靠「显式空切片」关闭，
+	// 但只要用户在面板里改过一次签到时间，SetCheckinTimes 就会把全局时刻推给**所有**
+	// 调度器，空切片被覆盖 → 这些渠道每天在配置时刻空跑一次必然失败的签到，
+	// 且结果带 retryable=true 会「retry next tick」反复刷日志。
+	NoScheduledCheckin bool
+
 	// Ledger 积分流水记账器（非 nil 时签到后余额刷新触发差分记账）。
 	Ledger *ledger.Ledger
 }
@@ -56,6 +66,12 @@ type Scheduler struct {
 	wake      chan struct{}              // 配置变更唤醒 Run 循环重算下次触发
 	onCheckin func(CheckinResult)        // 结果观察器，供 GUI 接收自动签到结果
 	onRefresh func(string, bool, string) // token 刷新结果观察器
+
+	// baseCheckin 本渠道自己的签到时刻快照（面板全局时间覆盖后的新值也会同步到这里）。
+	// 纯签到总开关重新打开时用它恢复；总开关关闭只清空 cfg.CheckinMinutes，不动这里。
+	baseCheckin []int
+	// checkinOff 纯签到总开关的运行态（false = 开启）。关闭时 cfg.CheckinMinutes 恒为空。
+	checkinOff bool
 
 	// refreshOverride 仅测试使用：替换 refreshForCheckin 的刷新动作（模拟「刷新也失败」）。
 	refreshOverride func(*auth.Auth, string) error
@@ -78,6 +94,10 @@ type Scheduler struct {
 // 用 len(...) == 0 判定会把后者一并兜底成默认时间，导致无签到活动、
 // 无 refresh 端点的渠道每天空跑并记录失败。
 func New(cfg Config) *Scheduler {
+	if cfg.NoScheduledCheckin {
+		// 本渠道没有定时签到：无论调用方传了什么，一律清空（R39 语义的强化版）。
+		cfg.CheckinMinutes = []int{}
+	}
 	if cfg.CheckinMinutes == nil {
 		if len(cfg.CheckinHours) > 0 {
 			cfg.CheckinMinutes = make([]int, 0, len(cfg.CheckinHours))
@@ -93,7 +113,12 @@ func New(cfg Config) *Scheduler {
 	if cfg.KeepaliveHours == nil {
 		cfg.KeepaliveHours = []int{22}
 	}
-	return &Scheduler{cfg: cfg, wake: make(chan struct{}, 1), checkinDone: map[string]bool{}}
+	return &Scheduler{
+		cfg:         cfg,
+		wake:        make(chan struct{}, 1),
+		checkinDone: map[string]bool{},
+		baseCheckin: append([]int{}, cfg.CheckinMinutes...),
+	}
 }
 
 // schedule 返回当前签到分钟/保活小时配置的副本。
@@ -138,7 +163,13 @@ func (s *Scheduler) KeepaliveHours() []int {
 }
 
 // SetCheckinMinutes 运行中更新签到分钟并唤醒调度循环。
+//
+// NoScheduledCheckin 的渠道直接忽略：它本来就没有定时签到，把面板的全局时刻写进去
+// 只会让它在每天那个时刻空跑一次必然失败的签到（2026-11-03 实测的回归）。
 func (s *Scheduler) SetCheckinMinutes(minutes []int) {
+	if s.cfg.NoScheduledCheckin {
+		return
+	}
 	clean := make([]int, 0, len(minutes))
 	seen := map[int]bool{}
 	for _, m := range minutes {
@@ -149,7 +180,30 @@ func (s *Scheduler) SetCheckinMinutes(minutes []int) {
 	}
 	sort.Ints(clean)
 	s.mu.Lock()
-	s.cfg.CheckinMinutes = clean
+	s.baseCheckin = clean
+	// 总开关关着时只更新快照，不激活（等 SetCheckinEnabled(true) 恢复）。
+	if !s.checkinOff {
+		s.cfg.CheckinMinutes = clean
+	}
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+// SetCheckinEnabled 运行中开关纯签到：关闭即清空签到时刻，打开恢复本渠道自己的时刻。
+//
+// 关闭必须落到调度器上——只改配置文件的话，正在跑的进程会继续按旧时刻签到，
+// 用户以为关了、实际每天还在打上游（2026-11-03 之前的实现就是这样）。
+func (s *Scheduler) SetCheckinEnabled(on bool) {
+	s.mu.Lock()
+	s.checkinOff = !on
+	if on {
+		s.cfg.CheckinMinutes = append([]int{}, s.baseCheckin...)
+	} else {
+		s.cfg.CheckinMinutes = []int{}
+	}
 	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:

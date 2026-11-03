@@ -451,7 +451,7 @@ function chPrefixChip(k) {
 // WorkBuddy 国际版不提供手动签到，而是自动对话保活领日活奖励；千问办公无签到活动；
 // ZCode / Gemini 无签到活动（ZCode 的领取依赖网页验证码，本工具不实现）；
 // 小浣熊（R65 setting_info 惰性落账）/ Loomy / MonkeyCode 已实现签到，保留手动按钮。
-const NO_EXPLICIT_CHECKIN = new Set(["qoder", "workbuddyai", "qwenwork", "zcode", "gemini"]);
+const NO_EXPLICIT_CHECKIN = new Set(["qoder", "workbuddyai", "glm", "qwenwork", "zcode", "gemini"]);
 const noExplicitCheckin = (g) => NO_EXPLICIT_CHECKIN.has(g);
 // 导入型渠道：凭据由本机已登录的官方客户端提供，没有浏览器登录流程（见 internal/app/import_local.go）。
 const IMPORT_LOCAL_CHANNELS = new Set(["raccoon", "loomy", "monkeycode", "officeace"]);

@@ -354,9 +354,8 @@ func main() {
 		fatal("解析签到时间失败：%v", err)
 	}
 	// 查看器默认不执行任何签到；仅在面板显式开启后按配置时间运行纯签到。
-	if !cfg.Features.CheckinEnabled {
-		checkinMinutes = []int{}
-	}
+	// 注意：开关**不在这里**把 checkinMinutes 清空——那样会连「本渠道自己的时刻快照」
+	// 一起丢掉，运行中重新打开就恢复不出来。开关在调度器全部构建完后统一下发（见下）。
 	// 聊天保活已移除：查看器不得为维持会话向上游发起对话。
 	keepaliveHours := []int{}
 
@@ -378,7 +377,7 @@ func main() {
 	trSch := scheduler.New(scheduler.Config{Pool: trPool, Upstream: trUp, Name: "traework", CheckinMinutes: checkinMinutes, KeepaliveHours: keepaliveHours, Ledger: lg})
 	// Qoder 无签到活动：调度器只做 token keepalive（每日 refresh 保活）。
 	// CheckinMinutes 用显式空切片关闭（传 nil 会被 scheduler.New 补成默认 9:00/21:00）。
-	qdSch := scheduler.New(scheduler.Config{Pool: qdPool, Upstream: qdUp, Name: "qoder", CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg})
+	qdSch := scheduler.New(scheduler.Config{Pool: qdPool, Upstream: qdUp, Name: "qoder", CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg, NoScheduledCheckin: true})
 	// WorkBuddy 国际版：无显式签到（ActivitiesOnly 模式）。
 	// 定时仍对每个账号调用 DailyCheckin，其实现为「免费模型对话保活 + 签到探测」；
 	// 不记录/上报签到状态，保持对用户透明。
@@ -386,14 +385,14 @@ func main() {
 	// （传 nil 会被 scheduler.New 补成默认 22:00）。
 	wbaSch := scheduler.New(scheduler.Config{Pool: wbaPool, Upstream: wbaUp, Name: "workbuddyai",
 		// 该渠道的「签到」实为免费模型对话保活，查看器不产生会话 ⇒ 显式关闭。
-		CheckinMinutes: []int{}, KeepaliveHours: []int{}, ActivitiesOnly: true, Ledger: lg})
+		CheckinMinutes: []int{}, KeepaliveHours: []int{}, ActivitiesOnly: true, Ledger: lg, NoScheduledCheckin: true})
 	// 千问办公：无签到活动（每日积分服务端被动发放，无需保活/领取）；
 	// CheckinMinutes + KeepaliveHours 均为显式空切片，本渠道没有任何定时任务
 	// （token 由 deviceToken/refresh 按需轮换，定时保活反而会与千问办公 App
 	// 互踩 —— 见备忘 §7.5 风险 1）。
 	// 余额/费率靠 StartCreditAutoRefresh 循环拉取。
 	qwSch := scheduler.New(scheduler.Config{Pool: qwPool, Upstream: qwUp, Name: "qwenwork",
-		CheckinMinutes: []int{}, KeepaliveHours: []int{}, Ledger: lg})
+		CheckinMinutes: []int{}, KeepaliveHours: []int{}, Ledger: lg, NoScheduledCheckin: true})
 	// QoderCN：仅 campaigns 活动路径（legacy daily-check-in 已 DISABLED，其 claim 恒返回
 	// 409 会造成「假成功」，故不再使用）。签到窗口对齐上游 qoder2api：10:00 开放，
 	// 活动可能在整点后才创建，故 10:00–12:00 之间每分钟重试，直到真正领到或超时。
@@ -442,12 +441,12 @@ func main() {
 	// （JWT 无 exp）⇒ 定时任务全关。必须传显式空切片（R39）：传 nil 会被补成默认
 	// 9:00/21:00 签到与 22:00 保活，每天空跑两次必然失败的调用并污染面板。
 	zcdSch := scheduler.New(scheduler.Config{Pool: zcdPool, Upstream: zcdUp, Name: "zcode",
-		CheckinMinutes: []int{}, KeepaliveHours: []int{}})
+		CheckinMinutes: []int{}, KeepaliveHours: []int{}, NoScheduledCheckin: true})
 	// Gemini：**无签到**（DailyCheckin 返回明确的「不支持」错误），但有 refresh_token 可续期
 	// ⇒ 只开保活；CheckinMinutes 用显式空切片关闭（R39：传 nil 会被补成默认 9:00/21:00，
 	// 每天空跑两次必然失败的签到并污染面板）。
 	gemSch := scheduler.New(scheduler.Config{Pool: gemPool, Upstream: gemUp, Name: "gemini",
-		CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg})
+		CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg, NoScheduledCheckin: true})
 	// CodeArts：有每日签到（三步，走 HMAC 签名；本包实现了 CheckinReporter/CheckinGranter，
 	// 签到结果按结构化状态上报），也需要 token 保活（续期后必须落盘，不变量 20）。
 	caSch := scheduler.New(scheduler.Config{Pool: caPool, Upstream: caUp, Name: "codearts",
@@ -458,7 +457,16 @@ func main() {
 	// KeepaliveHours 也用同一时段（保活=签到，不必额外一次）。
 	glmSch := scheduler.New(scheduler.Config{Pool: glmPool, Upstream: glmUp, Name: "glm",
 		// 智谱清言的签到依赖先发一轮最小对话（keepaliveChat），查看器不产生会话 ⇒ 显式关闭。
-		CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg})
+		CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg, NoScheduledCheckin: true})
+
+	// 纯签到总开关：把运行态下发给每个调度器，而不是只写配置文件。
+	// 关闭 → 清空签到时刻（保留各自快照）；重新打开 → 恢复该渠道自己的时刻。
+	for _, s := range []*scheduler.Scheduler{
+		wbSch, trSch, qdSch, wbaSch, qwSch, qcnSch, qcmSch, mcSch,
+		rcSch, lmSch, oaSch, mimSch, lobSch, zcdSch, gemSch, caSch, glmSch,
+	} {
+		s.SetCheckinEnabled(cfg.Features.CheckinEnabled)
+	}
 
 	// 查看器运行时：只有账号池、查询客户端与静态兜底表，没有转发 Handler。
 	appRuntimes := map[provider.Kind]*app.Runtime{

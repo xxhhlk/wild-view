@@ -443,7 +443,10 @@ func (a *App) creditsUnit(group string) string {
 func noExplicitCheckin(k provider.Kind) bool {
 	// GLM 的每日签到必须先发一轮最小对话（keepaliveChat），属于查看器明确移除的
 	// 聊天保活，故不提供手动/批量入口。
-	return k == provider.WorkBuddyAI || k == provider.GLM || k == provider.QwenWork || k == provider.ZCode || k == provider.Gemini
+	// Qoder 的 DailyCheckin 直接返回「暂无签到活动」（internal/qoder/client.go），
+	// 与面板 NO_EXPLICIT_CHECKIN 必须同口径 —— 否则按钮亮着但点了必失败。
+	return k == provider.WorkBuddyAI || k == provider.GLM || k == provider.QwenWork ||
+		k == provider.ZCode || k == provider.Gemini || k == provider.Qoder
 }
 
 func (a *App) noExplicitCheckinKind(k provider.Kind) bool {
@@ -2369,6 +2372,13 @@ func (a *App) SetCheckinEnabled(on bool) error {
 	a.mu.Unlock()
 	if err != nil {
 		return err
+	}
+	// 必须下发到正在跑的调度器：只改配置文件的话，本进程仍按旧时刻继续签到，
+	// 用户以为关了、实际每天还在打上游。
+	for _, rt := range a.runtimesSnapshot() {
+		if rt != nil && rt.Scheduler != nil {
+			rt.Scheduler.SetCheckinEnabled(on)
+		}
 	}
 	log.Printf("纯签到已%s", map[bool]string{true: "开启", false: "关闭"}[on])
 	return nil
