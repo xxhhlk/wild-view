@@ -878,8 +878,8 @@ func (a *App) needsPollFor(kind string) bool {
 //   - LobsterAI：`redirect_uri` 由本工具给出，但回调口绝不监听非环回（见 internal/login_lobsterai）；
 //   - TraeWork：回调写死 `http://127.0.0.1:<随机端口>/authorize`，且监听只有 5 分钟寿命，
 //     局域网/超时场景下凭证都到不了网关（见 internal/login_trae，issue #98）；
-//   - QwenWork：回调固定为官方域名 gateway.qwenwork.cn（白名单精确匹配，自建回环被拒），
-//     本机收不到授权码，只能靠粘贴；
+//   - QwenWork：官方客户端的回调白名单已收紧，改用动态注册的 public client + 本机回环，
+//     浏览器与网关同机时自动回调，异地面板仍靠粘贴；
 //   - Gemini：installed-app 政策限 redirect host 为 localhost（不可改，见 internal/login_gemini）。
 //
 // 其余渠道的回调**不是**这种形状：有的由网关侧轮询/捕获（glm、小浣熊、OfficeAce），
@@ -2999,7 +2999,7 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 	// CodeArts 的 portal 按 `port` 参数把浏览器跳到 `http://127.0.0.1:<port>/oauth/callback`，
 	// LobsterAI 的 portal 按 `redirect_uri` 原样跳回 `http://127.0.0.1:<port>/auth/callback`，
 	// TraeWork 的回调写死 `http://127.0.0.1:<随机端口>/authorize`（且监听只有 5 分钟寿命），
-	// QwenWork 的回调固定为官方 gateway.qwenwork.cn（自建回环已被拒），本机收不到，
+	// QwenWork 的回调是登录时动态注册出来的本机回环（官方客户端白名单已不接受自建地址），
 	// Gemini 的 installed-app 政策限 redirect host 为 localhost（`/oauth-callback`）。
 	// 五者都只有在「浏览器与网关同一台机器」时授权码才自动回到网关。从局域网别处打开面板时，
 	// 浏览器跳到的是**用户自己机器**的 127.0.0.1（连接被拒），流程只能等到超时。

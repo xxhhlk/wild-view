@@ -1,64 +1,94 @@
 package login_qwenwork
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// TestStartUsesOfficialRedirect 守门 OAuth 回调白名单。
+// TestBuildAuthURLUsesRegisteredClient 守门 OAuth 客户端与回调地址的一致性。
 //
-// 2026-11 起 qwenwork 的授权服务只接受官方注册的
-// https://gateway.qwenwork.cn/oauth/callback，自建回环地址
-// （http://127.0.0.1:<port>/callback）会直接返回
-// invalid_request: redirect_uri does not match any of the OAuth 2.0 Client's
-// pre-registered redirect urls。
-//
-// 因此授权 URL 与 token 兑换里的 redirect_uri 必须是同一个官方值；
-// 一旦有人「优化」回本机监听，本用例必须变红。
-func TestStartUsesOfficialRedirect(t *testing.T) {
-	fp := filepath.Join(t.TempDir(), "login-state.json")
-	authURL, err := Start(nil, fp)
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+// 2026-11 起官方客户端 qwenwork-desktop-app 的 redirect_uri 白名单只剩
+// https://gateway.qwenwork.cn/oauth/callback，自建回环一律 invalid_request；
+// 该官方回调页又会校验桌面端会话，粘回来的 code 已被判 INVALID_OAUTH_CALLBACK。
+// 因此登录改为「动态注册 public client + 本机回环回调」：
+// 授权 URL 里的 client_id 必须是注册返回值，redirect_uri 必须与注册值逐字一致，
+// 否则授权页会再次报 invalid_request。
+func TestBuildAuthURLUsesRegisteredClient(t *testing.T) {
+	const cid = "61f06437-a70b-4048-a5f5-76942e44f964"
+	const redirect = "http://127.0.0.1:17863/callback"
 
-	u, err := url.Parse(authURL)
+	raw := buildAuthURL(cid, redirect, "challenge-value", "state-value")
+	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("auth url 解析失败: %v", err)
 	}
 	q := u.Query()
-	if got := q.Get("redirect_uri"); got != OfficialRedirect {
-		t.Fatalf("redirect_uri = %q，期望官方值 %q", got, OfficialRedirect)
+	if got := q.Get("client_id"); got != cid {
+		t.Fatalf("client_id = %q，期望注册返回的 %q", got, cid)
 	}
-	if strings.Contains(authURL, "127.0.0.1") || strings.Contains(authURL, "localhost") {
-		t.Fatalf("授权 URL 不得再出现本机回调：%s", authURL)
+	if got := q.Get("redirect_uri"); got != redirect {
+		t.Fatalf("redirect_uri = %q，期望 %q", got, redirect)
 	}
-	if q.Get("client_id") != ClientID {
-		t.Errorf("client_id = %q", q.Get("client_id"))
+	if q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" {
+		t.Errorf("授权参数不完整: %v", q)
 	}
-	if q.Get("code_challenge") == "" || q.Get("code_challenge_method") != "S256" {
-		t.Error("缺少 PKCE 参数")
+	if len(q.Get("state")) < 8 {
+		t.Errorf("state 太短（服务端要求 ≥8 字符）: %q", q.Get("state"))
 	}
-
-	// 兑换阶段用的 redirect_uri 必须与授权时一致，否则 token 端点会拒。
-	st, err := readState(fp)
-	if err != nil {
-		t.Fatalf("readState: %v", err)
-	}
-	if st.RedirectURI != OfficialRedirect {
-		t.Fatalf("state.RedirectURI = %q，期望 %q", st.RedirectURI, OfficialRedirect)
-	}
-	if st.Verifier == "" {
-		t.Error("state 缺少 code_verifier")
+	if q.Get("scope") == "" {
+		t.Error("缺少 scope")
 	}
 }
 
-// TestSubmitCallbackURLParsesCode 粘贴兜底：能从官方回调地址里取出 code。
+// TestRegisterClientParsesClientID 动态注册：从响应里取 client_id。
+func TestRegisterClientParsesClientID(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s", r.Method)
+		}
+		buf, _ := io.ReadAll(r.Body)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"client_id":"cid-123","redirect_uris":["http://127.0.0.1:17863/callback"]}`))
+	}))
+	defer srv.Close()
+
+	cid, err := registerClient(srv.Client(), srv.URL, "http://127.0.0.1:17863/callback")
+	if err != nil {
+		t.Fatalf("registerClient: %v", err)
+	}
+	if cid != "cid-123" {
+		t.Fatalf("client_id = %q", cid)
+	}
+	if !strings.Contains(gotBody, "authorization_code") || !strings.Contains(gotBody, "17863") {
+		t.Errorf("注册请求体不符合预期: %s", gotBody)
+	}
+}
+
+// TestRegisterClientRejectsError 注册失败要带出上游原因，不能静默返回空 client_id。
+func TestRegisterClientRejectsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_client_metadata"}`))
+	}))
+	defer srv.Close()
+
+	if _, err := registerClient(srv.Client(), srv.URL, "http://127.0.0.1:17863/callback"); err == nil {
+		t.Fatal("应返回错误")
+	} else if !strings.Contains(err.Error(), "400") {
+		t.Errorf("错误信息未带状态码: %v", err)
+	}
+}
+
+// TestSubmitCallbackURLParsesCode 粘贴兜底：能从回调地址里取出 code。
 func TestSubmitCallbackURLParsesCode(t *testing.T) {
 	pending.reset()
-	raw := "https://gateway.qwenwork.cn/oauth/callback?code=abc123&state=xyz"
+	raw := "http://127.0.0.1:17863/callback?code=abc123&state=xyz"
 	if err := SubmitCallbackURL(raw); err != nil {
 		t.Fatalf("SubmitCallbackURL: %v", err)
 	}
@@ -71,7 +101,7 @@ func TestSubmitCallbackURLParsesCode(t *testing.T) {
 // TestSubmitCallbackURLReportsOAuthError 授权页带回 error 时要如实透传，不能当成成功。
 func TestSubmitCallbackURLReportsOAuthError(t *testing.T) {
 	pending.reset()
-	err := SubmitCallbackURL("https://gateway.qwenwork.cn/oauth/callback?error=access_denied&error_description=user+canceled")
+	err := SubmitCallbackURL("http://127.0.0.1:17863/callback?error=access_denied&error_description=user+canceled")
 	if err == nil {
 		t.Fatal("应返回错误")
 	}

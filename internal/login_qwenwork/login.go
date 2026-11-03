@@ -1,18 +1,18 @@
-// Package login_qwenwork 实现千问办公（IDE 桌面版同款）OAuth 授权码登录：
+// Package login_qwenwork 实现千问办公 OAuth 授权码登录：
 // PKCE(S256) + Ory Hydra 授权码流，本机 HTTP 回调收 code 后本地兑换 token。
 //
-// 链路（逆向自 ref/qwenwork_auth_20260919.saz，见备忘 §9）：
-//  1. Start：生成 PKCE + state，返回授权 URL（client_id=qwenwork-desktop-app，
-//     redirect_uri 固定为官方值 https://gateway.qwenwork.cn/oauth/callback）。
-//  2. 用户在系统浏览器打开授权 URL 并完成登录，浏览器跳到官方回调页；
-//     该页属于官方客户端，本工具收不到回调，故由用户把地址栏 URL 粘回面板
-//     （POST /api/login/callback → SubmitCallbackURL）。
-//  3. 解析出 code 后用 code_verifier 兑换 token（Hydra 标准 /oauth2/token，
-//     public client 无 secret）；redirect_uri 必须与授权时完全一致。
+// 链路：
+//  1. Start：起本机回调 server（随机端口）→ 用该回调地址向授权服务做**动态客户端注册**
+//     （RFC 7591，`/oauth2/register` 开放）拿到 client_id → 生成 PKCE + state → 返回授权 URL。
+//  2. 用户在系统浏览器打开授权 URL，登录后浏览器跳回本机回调，code 直接到达本工具。
+//  3. 回调收到 code → 用 code_verifier + 同一 redirect_uri + 注册得到的 client_id 兑换 token。
 //  4. Poll：轮询 pending 通道，成功即写凭据。
 //
-// 历史：2026-11 之前服务端接受任意 127.0.0.1 回环回调，本工具曾用本机随机端口
-// 自动收码；上游收紧白名单后回环地址一律 invalid_request，只能改走官方回调 + 粘贴。
+// 为什么不再用官方的 `qwenwork-desktop-app` 客户端：2026-11 起该客户端的 redirect_uri
+// 白名单只保留 `https://gateway.qwenwork.cn/oauth/callback`，自建回环地址一律
+// invalid_request；而官方回调页会校验桌面端会话，授权码粘回来时已被判 INVALID_OAUTH_CALLBACK。
+// 授权服务同时开放动态客户端注册，故改为「每次登录注册一个专用 public client」，
+// 回调地址与本机监听端口精确对应，无需依赖任何预注册值。
 package login_qwenwork
 
 import (
@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,10 +37,11 @@ import (
 const (
 	OAuthBase   = "https://qwenwork.cn"
 	TokenURL    = OAuthBase + "/oauth2/token"
-	ClientID    = "qwenwork-desktop-app"
-	// OfficialRedirect 官方桌面端注册的回调地址。服务端按白名单精确匹配，
-	// 自建回环地址（http://127.0.0.1:<port>/callback）会被拒为 invalid_request。
-	OfficialRedirect = "https://gateway.qwenwork.cn/oauth/callback"
+	// RegisterURL 动态客户端注册端点（RFC 7591）。返回的 client_id 与本次登录的
+	// 回环回调地址绑定，供授权与 token 兑换共用。
+	RegisterURL = OAuthBase + "/oauth2/register"
+	// clientName 注册时展示的客户端名（出现在用户授权页）。
+	clientName = "wild-view"
 	Scope       = "openid profile email offline_access qwen_work"
 	callbackTTL = 5 * time.Minute // 本机回调 server 最长等待
 )
@@ -60,6 +62,7 @@ type Result struct {
 
 // state 落盘的 PKCE 状态（含回调端口，供 Poll 与回调 server 共享）。
 type state struct {
+	ClientID     string `json:"client_id"`
 	Verifier     string `json:"verifier"`
 	RedirectURI  string `json:"redirect_uri"`
 	CallbackPort int    `json:"callback_port"`
@@ -75,7 +78,11 @@ type pendingCode struct {
 	received bool
 }
 
-var pending = &pendingCode{}
+var (
+	pending     = &pendingCode{}
+	callbackSrv *http.Server
+	callbackLn  net.Listener
+)
 
 // SubmitCallbackURL 手动提交浏览器跳转后的回调地址（远程/局域网面板的粘贴兜底入口）。
 //
@@ -124,25 +131,121 @@ func NewClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
-// Start 发起登录：生成 PKCE 与 state，返回授权 URL。
-// 回调固定走官方地址，本机不再监听端口——授权码由用户粘贴回面板。
-func Start(_ *http.Client, statePath string) (string, error) {
+// Start 发起登录：起本机回调、动态注册客户端、返回授权 URL。
+func Start(client *http.Client, statePath string) (string, error) {
+	if client == nil {
+		client = NewClient()
+	}
 	verifier, challenge := makePKCE()
-	redirectURI := OfficialRedirect
 
-	authURL := fmt.Sprintf("%s/oauth2/auth?client_id=%s&code_challenge=%s&code_challenge_method=S256&redirect_uri=%s&response_type=code&scope=%s&state=%s",
-		OAuthBase, ClientID, challenge,
-		url.QueryEscape(redirectURI),
-		url.QueryEscape(Scope),
-		uuid4Hex(), // state 服务端只透传，无需承载内容
-	)
+	// 1) 本机回调：随机空闲端口
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", fmt.Errorf("listen callback: %w", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 
-	st := state{Verifier: verifier, RedirectURI: redirectURI, AuthURL: authURL, CreatedAt: time.Now().Unix()}
-	if err := writeState(statePath, st); err != nil {
+	// 2) 动态注册：client_id 与本次回调地址绑定（官方客户端白名单不再接受自建回环）
+	clientID, err := registerClient(client, RegisterURL, redirectURI)
+	if err != nil {
+		_ = ln.Close()
 		return "", err
 	}
+
+	authURL := buildAuthURL(clientID, redirectURI, challenge, uuid4Hex())
+
+	st := state{ClientID: clientID, Verifier: verifier, RedirectURI: redirectURI, CallbackPort: port, AuthURL: authURL, CreatedAt: time.Now().Unix()}
+	if err := writeState(statePath, st); err != nil {
+		_ = ln.Close()
+		return "", err
+	}
+
+	// 3) 起回调 server（异步等 code）
 	pending.reset()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		q := r.URL.Query()
+		if e := q.Get("error"); e != "" {
+			desc := q.Get("error_description")
+			if desc == "" {
+				desc = e
+			} else {
+				desc = desc + " (" + e + ")"
+			}
+			pending.fail(desc)
+			_, _ = io.WriteString(w, callbackPage(false, desc))
+			return
+		}
+		code := q.Get("code")
+		if code == "" {
+			pending.fail("回调缺少 code 参数")
+			_, _ = io.WriteString(w, callbackPage(false, "回调缺少 code 参数"))
+			return
+		}
+		pending.set(code)
+		// 此时尚未完成兑换（Poll 轮询兑换），文案用「已收到授权」而非「登录成功」。
+		_, _ = io.WriteString(w, callbackPage(true, ""))
+	})
+	callbackLn = ln
+	callbackSrv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = callbackSrv.Serve(ln) }()
+
 	return authURL, nil
+}
+
+// buildAuthURL 组装授权 URL。抽成函数便于用例直接断言参数，不必起网络。
+func buildAuthURL(clientID, redirectURI, challenge, stateVal string) string {
+	return fmt.Sprintf("%s/oauth2/auth?client_id=%s&code_challenge=%s&code_challenge_method=S256&redirect_uri=%s&response_type=code&scope=%s&state=%s",
+		OAuthBase,
+		url.QueryEscape(clientID),
+		url.QueryEscape(challenge),
+		url.QueryEscape(redirectURI),
+		url.QueryEscape(Scope),
+		url.QueryEscape(stateVal),
+	)
+}
+
+// registerClient 动态注册一个 public client（RFC 7591），回调地址绑定到本次监听端口。
+// 返回的 client_id 用于授权与 token 兑换；注册失败时给出可读原因。
+func registerClient(client *http.Client, endpoint, redirectURI string) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"client_name":                clientName,
+		"redirect_uris":              []string{redirectURI},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+		"token_endpoint_auth_method": "none",
+		"scope":                      Scope,
+	})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("动态注册客户端失败: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("动态注册客户端失败 http %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	var out struct {
+		ClientID string `json:"client_id"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", fmt.Errorf("注册响应解析失败: %w", err)
+	}
+	if out.ClientID == "" {
+		return "", fmt.Errorf("注册响应缺少 client_id: %s", truncate(string(raw), 200))
+	}
+	return out.ClientID, nil
 }
 
 // Poll 单次检查登录结果；未完成返回 ErrPending；成功兑换 token 并清理。
@@ -174,7 +277,7 @@ func Poll(client *http.Client, statePath string) (Result, error) {
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
 		"redirect_uri":  {st.RedirectURI},
-		"client_id":     {ClientID},
+		"client_id":     {st.ClientID},
 		"code_verifier": {st.Verifier},
 	}
 	req, err := http.NewRequest(http.MethodPost, TokenURL, strings.NewReader(form.Encode()))
@@ -219,10 +322,14 @@ func Poll(client *http.Client, statePath string) (Result, error) {
 	return res, nil
 }
 
-// Shutdown 清理登录残留状态（登录结束/超时/取消时调用）。
-// 本机回调 server 已移除，这里只保留调用契约，避免上层改线。
+// Shutdown 关闭回调 server 并清理残留状态（登录结束/超时/取消时调用）。
 func Shutdown() {
 	pending.reset()
+	if callbackSrv != nil {
+		_ = callbackSrv.Close()
+		callbackSrv = nil
+		callbackLn = nil
+	}
 }
 
 // ---------------------------------------------------------------------------
