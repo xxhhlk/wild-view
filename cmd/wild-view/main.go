@@ -1,4 +1,4 @@
-// Command wild-work 系统托盘 daemon 入口。
+// Command wild-view 系统托盘 daemon 入口。
 // 单进程 = OpenAI 兼容 HTTP 服务 + 自动签到调度器 + 系统托盘 + 静态 Web UI。
 // 双击 exe 启动常驻托盘；托盘菜单：打开主界面 / 刷新积分 / 查看日志 / 退出；
 // 打开主界面或双击托盘 → 系统浏览器打开 Web UI。

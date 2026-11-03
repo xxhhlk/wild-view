@@ -1,7 +1,10 @@
-# wild-work 发布说明（RELEASES）
+# wild-view 发布说明（RELEASES）
 
 本文件汇总各版本发布说明，按版本**从旧到新**排列（v2.0.1 → 最新）。
 发布新版本时，将新版本说明 **append 到本文件末尾**（保持从旧到新，日志自然增长）。
+
+> v2.10.0 及更早的条目继承自上游 `rockswang/wild-work`，标题仍写作 `# wild-work vX.Y.Z`；
+> 自 v2.12.0 起本仓独立发版，标题统一为 `# wild-view vX.Y.Z`（release workflow 按该前缀抽取段落）。
 
 ---
 
@@ -3756,3 +3759,38 @@ DeepSeek Harness 的 system prompt 正是以这句开头，于是经本代理转
 
 - 浏览器无法切换系统输入法状态，密码框获得焦点后输入法仍是原状态，只在字符层做拦截与转换
 - 已移除渠道在运行统计里保留零值条目，不影响路由与账本
+
+---
+
+# wild-view v2.12.0
+
+首个独立发版（基线 = 上游 `rockswang/wild-work` v2.11.2 + 查看器化改造）。
+
+## 千问办公：网页登录恢复可用
+
+- 查清桌面端真实链路：OAuth 只是**设备流的内层实现**，第三方只能从
+  `/device/selectAccounts` 进入（该端点 302 到 `/oauth2/auth` 时，`state` 与
+  `code_challenge` 都由网关自己签发，这正是手工拼 OAuth 必撞 `INVALID_OAUTH_CALLBACK` 的原因）
+- 登录改为设备授权：浏览器登录 → 轮询 `deviceToken/poll` 取凭据，不依赖本机回调端口，
+  远程/局域网面板也能自动完成
+- 新增「从桌面端导入」：直接读本机千问办公桌面端凭据（Electron safeStorage + Windows DPAPI）
+
+## 签到
+
+- 无签到渠道不再被自动签到空跑：面板改签到时间时只推给声明跟随全局的渠道
+  （Qoder 双区的固定 10:00 窗口不再被覆盖）
+- 纯签到总开关运行中生效（此前只写配置文件，进程仍照旧签到）
+- 面板签到徽标改为「先判无签到，再看时间戳」，无签到渠道不再显示红色「签到失败」
+
+## 账号与凭据
+
+- OfficeAce：修 `StartOfficeAceLogin` 成功路径漏释放锁，此前点一次就把三个登录接口永久阻塞
+- Loomy：凭据写远期 `expiresAt`（无 refresh 端点，估算值到期会触发必然失败的刷新），
+  并新增启动自愈把存量估算值归一
+- Loomy：短信验证码判据改为「全零 code 都算成功」，`msgid` 兼容多种字段名与顶层兜底
+- 小浣熊：按实测修正 8 个模型的识图能力
+
+## 构建与发布
+
+- 版本号统一由 `internal/app/app.go` 的 `Version` 常量驱动（面板、macOS 包版本、dmg 文件名）
+- 推 `v*` 标签自动三平台构建并发布正式 release
