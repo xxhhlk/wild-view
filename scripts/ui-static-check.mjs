@@ -87,7 +87,7 @@ const window = { addEventListener: () => {}, location: { search: "" } };
 // 源码改写：注入 state + 导出函数
 const patched =
   raw.replace(/let state = null;/, "let state = " + JSON.stringify(FAKE_STATE) + ";") +
-  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, refreshFees, showOpenLink, hideOpenLink, toHalfWidthAscii, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, setState: (s) => { state = s; } };";
+  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, refreshFees, showOpenLink, hideOpenLink, toHalfWidthAscii, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, renderCreditDetail, setDetail: (uid, d) => { detailState = { uid, page: 0 }; detailCache[uid] = d; }, setState: (s) => { state = s; } };";
 
 // fetch 记录桩：checkin_times 变更要能断言「没点确定就不发请求」。
 // POST /api/config/checkin_times 会「落库」，后续 /api/state 必须回新值——
@@ -239,8 +239,31 @@ document.getElementById("timePicker").value = "21:30";
 T.commitTime();
 check("重复时间不发请求", POSTS().length === 0, `实际 ${POSTS().length} 次`);
 
-// ---- 场景 4：app.js 引用的每个 id 都必须在 index.html 里存在 ----
-// 起因：新增「签到时间选择器」时若只在 app.js 里取 $("timePicker") 而忘了在
+// ---- 场景：明细弹层的「已用」合计（2026-11-03 用户报「已消耗的积分没显示出来」）----
+// 每日发放类渠道（WorkBuddy 国际版每天发一个 30 分 Bonus Pack）会把已用完的套餐按到期日
+// 排到末页，弹层每页只显示 8 条 ⇒ 第一页「已用」列全是 0，用户据此以为消耗没被记录。
+// 合计必须按**全量条目**求和，且跳过 info_only（单位不同）与不可用池。
+const detailItems = [
+  { name: "Free Plan", total: 100, used: 0, remain: 100, expire_at: "2026-11-30T23:59:59+08:00", usable: true },
+];
+for (let i = 0; i < 8; i++) {
+  detailItems.push({ name: "Bonus Pack", total: 30, used: 0, remain: 30, expire_at: `2026-11-${12 + i}T05:00:00+08:00`, usable: true });
+}
+// 已用完的历史套餐：排序后落在最后一页，第一页看不到它们。
+detailItems.push({ name: "Bonus Pack", total: 30, used: 30, remain: 0, expire_at: "2026-11-05T03:20:09+08:00", usable: true });
+detailItems.push({ name: "Bonus Pack", total: 30, used: 30, remain: 0, expire_at: "2026-11-06T04:26:28+08:00", usable: true });
+// 单位不同 / 不可用池：不得并入「已用」合计。
+detailItems.push({ name: "每日 Token", total: 1000, used: 999, remain: 1, usable: true, info_only: true });
+detailItems.push({ name: "官方专用池", total: 500, used: 500, remain: 0, usable: false });
+
+T.setDetail("u-detail", { items: detailItems, usable_remain: 340, unusable_remain: 0 });
+T.renderCreditDetail();
+const detailHTML = document.getElementById("creditTip").innerHTML;
+check("明细弹层「已用」合计不受分页影响", detailHTML.includes("已用 <b>60</b>"), detailHTML.slice(detailHTML.indexOf("detail-sum")));
+check("明细弹层已用合计跳过 info_only / 不可用池", !detailHTML.includes("已用 <b>1559</b>") && !detailHTML.includes("已用 <b>1499</b>"));
+check("明细弹层保留可用小计", detailHTML.includes("可用 <b>340</b>"));
+
+// ---- 场景 4：app.js 引用的每个 id 都必须在 index.html 里存在 ----// 起因：新增「签到时间选择器」时若只在 app.js 里取 $("timePicker") 而忘了在
 // index.html 加元素，运行期会 `$(...).value` 报 null 错、整个设置弹层点开即崩，
 // 而 node --check 与功能断言都发现不了（stub 会给任何 id 凭空造节点）。
 const htmlIds = new Set([...html.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map((m) => m[1]));

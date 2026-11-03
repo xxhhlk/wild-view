@@ -371,10 +371,19 @@ function renderCreditDetail() {
   html += `</tbody></table>`;
 
   // 小计行：只在确实存在不可用额度时才拆开展示，否则保持单数字（不制造无意义的 0）。
+  // 已用合计按**全量条目**求和，不受分页影响——每日发放类渠道（WorkBuddy 国际版每天
+  // 发一个 30 分 Bonus Pack）的已用完套餐按到期日排序后落在末页，只看当前页的「已用」
+  // 列会全是 0，用户据此以为消耗没被记录。口径与 Summarize 一致：跳过 info_only（单位
+  // 不同）与不可用池（本工具消耗不到），只统计可用套餐。
   const usable = d.usable_remain || 0;
   const unusable = d.unusable_remain || 0;
+  const usedTotal = items.reduce(
+    (s, it) => s + ((it.usable && !it.info_only) ? (it.used || 0) : 0), 0);
   html += `<div class="detail-sum">`;
   html += `<span>可用 <b>${usable}</b></span>`;
+  if (usedTotal > 0) {
+    html += `<span class="detail-sum-used" title="该账号名下全部可用套餐的累计已用（含已用完、排在末页的历史套餐）">已用 <b>${usedTotal}</b></span>`;
+  }
   if (unusable > 0) html += `<span class="detail-sum-unusable">不可用 <b>${unusable}</b></span>`;
   html += `</div>`;
   tip.innerHTML = html;
