@@ -32,11 +32,19 @@ type accountEnvelope struct {
 	Data json.RawMessage `json:"data"`
 }
 
-// ok 判定信封是否成功（`code` 为 "0" 或 0）。
+// ok 判定信封是否**声明**成功：未带 code、或全零形态的 code 都算成功。
+//
+// 旧实现只认字面量 "0" 与空串，而实测上游对**已真实下发**的短信回
+// code="000000"（desc="成功"）—— 整次下发被判失败，msgid 不落库，用户点登录时
+// 后端查不到下发记录，页面提示「本机没有查到这次验证码的下发记录」。
+// 故改为「去掉所有 0 后为空」，兼容 "0"/"000000"/0 各种形态。
 func (e accountEnvelope) ok() bool {
 	c := strings.TrimSpace(string(e.Code))
 	c = strings.Trim(c, `"`)
-	return c == "0" || c == ""
+	if c == "" || c == "null" {
+		return true
+	}
+	return strings.Trim(c, "0") == ""
 }
 
 // message 取可展示的错误描述。
@@ -69,13 +77,13 @@ func buildAccountBody(param map[string]any) map[string]any {
 //
 // ⚠️ body **只序列化一次**，签名与发送共用同一个 []byte —— 这是签名能通过的前提
 // （二次序列化会改变字节：键序/空格）。
-func postAccount(client *http.Client, path string, body map[string]any) (json.RawMessage, error) {
+func postAccount(client *http.Client, path string, body map[string]any) (json.RawMessage, []byte, error) {
 	if client == nil {
 		client = NewClient()
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	serialized := string(raw)
 
@@ -86,7 +94,7 @@ func postAccount(client *http.Client, path string, body map[string]any) (json.Ra
 
 	req, err := http.NewRequest(http.MethodPost, accountBase+path, bytes.NewReader(raw))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -96,7 +104,7 @@ func postAccount(client *http.Client, path string, body map[string]any) (json.Ra
 	resp, err := client.Do(req)
 	if err != nil {
 		// 传输层失败：不把底层 error 原文原样透出（可能含 URL/请求细节，且对用户没帮助）。
-		return nil, fmt.Errorf("无法连接讯飞账号服务（%s）：请检查网络后重试", path)
+		return nil, nil, fmt.Errorf("无法连接讯飞账号服务（%s）：请检查网络后重试", path)
 	}
 	defer resp.Body.Close()
 
@@ -104,7 +112,7 @@ func postAccount(client *http.Client, path string, body map[string]any) (json.Ra
 
 	var env accountEnvelope
 	if err := json.Unmarshal(respRaw, &env); err != nil {
-		return nil, fmt.Errorf("讯飞账号服务响应不是 JSON（%s，HTTP %d）", path, resp.StatusCode)
+		return nil, nil, fmt.Errorf("讯飞账号服务响应不是 JSON（%s，HTTP %d）", path, resp.StatusCode)
 	}
 	if !env.ok() {
 		// 账号端点的鉴权/业务错误码一律透传 desc：上层据文案判断
@@ -112,12 +120,13 @@ func postAccount(client *http.Client, path string, body map[string]any) (json.Ra
 		//
 		// ⚠️ 只透传上游声明的 desc，**不透传响应体原文**：这些文案会经 app.pollLogin 进日志，
 		// 且 desc 里若意外回显了 token 也必须被吃掉（见 redact）。
-		return nil, errors.New(redact(env.message()))
+		return nil, nil, errors.New(redact(env.message()))
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("讯飞账号服务返回 HTTP %d（%s）", resp.StatusCode, path)
+		return nil, nil, fmt.Errorf("讯飞账号服务返回 HTTP %d（%s）", resp.StatusCode, path)
 	}
-	return env.Data, nil
+	// 同时回整包：msgid 有可能发在响应顶层而不是 data 里（见 sendCode 的三处兜底）。
+	return env.Data, respRaw, nil
 }
 
 // sendCode 下发短信验证码，返回 msgid。
@@ -127,17 +136,14 @@ func (s *session) sendCode(client *http.Client, phone string) (string, error) {
 		"phone":  phone,
 		"expire": smsCodeTTLSeconds,
 	})
-	data, err := postAccount(client, epSendCode, body)
+	data, raw, err := postAccount(client, epSendCode, body)
 	if err != nil {
 		// 不置终态：见 `noteSendFail` 注释（#173 缺陷 A）。
 		s.noteSendFail(redact("下发短信验证码失败：" + err.Error()))
 		return "", err
 	}
-	var m struct {
-		MsgID string `json:"msgid"`
-	}
-	_ = json.Unmarshal(data, &m)
-	if strings.TrimSpace(m.MsgID) == "" {
+	msgID := pickMsgID(data, raw)
+	if msgID == "" {
 		// 不返回空串：上层会拿它去登录，服务端必然报「msgid 无效」，
 		// 用户看到的将是一个与真实原因无关的错误（ofm loomy-oauth.ts:145-149 原话）。
 		msg := "短信验证码响应缺少 msgid（上游协议可能已变化）"
@@ -148,10 +154,45 @@ func (s *session) sendCode(client *http.Client, phone string) (string, error) {
 	s.mu.Lock()
 	s.phone = maskPhone(phone)
 	s.sendDone = true
-	s.msgid = m.MsgID
+	s.msgid = msgID
 	s.sendErr = "" // 一次成功下发就把上次的失败提示洗掉
 	s.mu.Unlock()
-	return m.MsgID, nil
+	return msgID, nil
+}
+
+// pickMsgID 从响应里找 msgid：先按 data 内的字段名变体找，再退到整包顶层。
+//
+// 为什么要兼容这么多写法：上游字段名在实测里出现过 msgid / msgId / msg_id，
+// 且有一次把 msgid 发在响应**顶层**而不是 data 里。只认 `data.msgid` 会让一次
+// 已经真实下发的验证码被判成「响应缺少 msgid」，用户还得再发一次短信。
+func pickMsgID(data, raw []byte) string {
+	if id := msgIDFrom(data); id != "" {
+		return id
+	}
+	if id := msgIDFrom(raw); id != "" {
+		return id
+	}
+	return ""
+}
+
+// msgIDFrom 在一段 JSON 对象里按字段名变体取 msgid（大小写与下划线都不敏感）。
+func msgIDFrom(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return ""
+	}
+	for k, v := range m {
+		if !strings.EqualFold(strings.ReplaceAll(k, "_", ""), "msgid") {
+			continue
+		}
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // login 用验证码换 session；成功即置 success 等 Poll 取走。
@@ -163,7 +204,7 @@ func (s *session) login(client *http.Client, phone, code, msgid string) (Result,
 		"msgid":  msgid,
 		"expire": sessionTTLSeconds,
 	})
-	data, err := postAccount(client, epCheckCode, body)
+	data, _, err := postAccount(client, epCheckCode, body)
 	if err != nil {
 		// ⚠️ 不置终态失败：验证码输错是常态，用户要能就地重试（ofm 同款）。
 		return Result{}, err
@@ -186,12 +227,15 @@ func (s *session) login(client *http.Client, phone, code, msgid string) (Result,
 
 	r := Result{
 		AccessToken: sess,
-		ExpiresAt:   time.Now().Add(sessionTTLSeconds * time.Second).Unix(),
-		Domain:      apiDomain,
-		ApiHost:     apiHost,
-		UID:         uid,
-		Phone:       phone,
-		Nickname:    maskPhone(phone),
+		// Loomy 无 refresh 端点、上游响应不带到期时间戳，本地只能估算 —— 而估算值一旦
+		// 到期即触发必然失败的刷新（见 internal/loomy.RefreshToken）。故写**远期哨兵**，
+		// 表示「本凭据不由 expiresAt 驱动刷新」，与导入路径/auth 侧哨兵口径一致。
+		ExpiresAt: time.Now().AddDate(50, 0, 0).Unix(),
+		Domain:    apiDomain,
+		ApiHost:   apiHost,
+		UID:       uid,
+		Phone:     phone,
+		Nickname:  maskPhone(phone),
 	}
 
 	s.mu.Lock()

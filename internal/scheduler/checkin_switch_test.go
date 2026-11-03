@@ -8,23 +8,38 @@ package scheduler
 
 import "testing"
 
-// TestNoScheduledCheckinIgnoresGlobalTimes 无签到渠道必须无视面板推来的全局时间。
-func TestNoScheduledCheckinIgnoresGlobalTimes(t *testing.T) {
-	s := New(Config{CheckinMinutes: []int{}, NoScheduledCheckin: true})
-	s.SetCheckinMinutes([]int{21*60 + 4}) // 面板：08:12/12:33/18:48/21:04
-	if got := s.CheckinMinutes(); len(got) != 0 {
-		t.Fatalf("无签到渠道被灌入了签到时刻 %v —— 会在该时刻空跑必然失败的签到", got)
+// TestFollowsGlobalCheckinFlag 白名单标记要如实反映到访问器上
+// （App.SetCheckinTimes 只向它为 true 的调度器推送新时刻）。
+func TestFollowsGlobalCheckinFlag(t *testing.T) {
+	on := New(Config{CheckinMinutes: []int{9 * 60}, FollowGlobalCheckin: true})
+	if !on.FollowsGlobalCheckin() {
+		t.Error("FollowGlobalCheckin=true 的调度器应报告跟随全局")
 	}
-	// 即便调用方误传了时刻，New 也要清空。
-	s2 := New(Config{CheckinMinutes: []int{600}, NoScheduledCheckin: true})
-	if got := s2.CheckinMinutes(); len(got) != 0 {
-		t.Fatalf("NoScheduledCheckin 应强制清空，得到 %v", got)
+	off := New(Config{CheckinMinutes: []int{}, FollowGlobalCheckin: false})
+	if off.FollowsGlobalCheckin() {
+		t.Error("未声明跟随全局的调度器不得被推送（Qoder 固定窗口 / 无签到渠道）")
 	}
 }
 
+// TestNoCheckinTimesSkipsRecording 没有签到时刻的渠道不落盘、不上报
+// ——即使被外部直接调 RunCheckinNow（否则面板会被必然失败的桩染红）。
+func TestNoCheckinTimesSkipsRecording(t *testing.T) {
+	var got []CheckinResult
+	s := New(Config{CheckinMinutes: []int{}})
+	s.SetCheckinObserver(func(r CheckinResult) { got = append(got, r) })
+	// 直接走收尾函数：模拟「本渠道没有签到任务，却有人触发了签到」。
+	s.finishCheckin("uid-1", CheckinResult{UID: "uid-1", Msg: "无签到活动"})
+	if len(got) != 0 {
+		t.Fatalf("无签到时刻的渠道不应上报观察者，得到 %+v", got)
+	}
+}
+
+// TestNoCheckinTimesSkipOnManualRun 没有签到时刻的渠道即使被直接触发也不落盘、不上报。
+// （白名单在 App.SetCheckinTimes 一侧，见 internal/app 的广播用例。）
+
 // TestSetCheckinEnabledRuntime 总开关必须落到运行中的调度器上（不能只改配置文件）。
 func TestSetCheckinEnabledRuntime(t *testing.T) {
-	s := New(Config{CheckinMinutes: []int{10 * 60}, CheckinRetryUntil: 12 * 60})
+	s := New(Config{CheckinMinutes: []int{10 * 60}, CheckinRetryUntil: 12 * 60, FollowGlobalCheckin: true})
 
 	s.SetCheckinEnabled(false)
 	if got := s.CheckinMinutes(); len(got) != 0 {
@@ -40,7 +55,7 @@ func TestSetCheckinEnabledRuntime(t *testing.T) {
 
 // TestSetCheckinMinutesWhileDisabled 关闭期间改时间：只更新快照，重新打开才生效。
 func TestSetCheckinMinutesWhileDisabled(t *testing.T) {
-	s := New(Config{CheckinMinutes: []int{9 * 60}})
+	s := New(Config{CheckinMinutes: []int{9 * 60}, FollowGlobalCheckin: true})
 	s.SetCheckinEnabled(false)
 	s.SetCheckinMinutes([]int{20 * 60})
 	if got := s.CheckinMinutes(); len(got) != 0 {

@@ -378,7 +378,9 @@ func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
 			ContextWindow:  m.Params.ContextWindow,
 			MaxTokens:      m.Params.MaxTokens,
 			ContextFromAPI: m.Params.ContextWindow > 0,
-			SupportsImages: hasTag(m.Tags, "vision"),
+			// catalog 的 vision tag 曾漏标 raccoon-19b265 / raccoon-405a1c，
+			// 但真实 image_url A/B 对照已确认它们可识图；能力按「上游声明 ∪ 实测」投影。
+			SupportsImages: hasTag(m.Tags, "vision") || measuredVisionModels[id],
 			// 本渠道不投影档位（上游目录未声明 reasoning_efforts，见阶段 C 实测），
 			// 仅如实声明模型是否具备推理标签，便于客户端自行选择。
 			SupportsReasoning: hasTag(m.Tags, "reasoning"),
