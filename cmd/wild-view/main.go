@@ -459,13 +459,17 @@ func main() {
 		// 智谱清言的签到依赖先发一轮最小对话（keepaliveChat），查看器不产生会话 ⇒ 显式关闭。
 		CheckinMinutes: []int{}, KeepaliveHours: keepaliveHours, Ledger: lg})
 
-	// 纯签到总开关：把运行态下发给每个调度器，而不是只写配置文件。
+	// 纯签到总开关 + 临期展示窗口：把运行态下发给每个调度器，而不是只写配置文件。
 	// 关闭 → 清空签到时刻（保留各自快照）；重新打开 → 恢复该渠道自己的时刻。
+	// 临期窗口必须一起下发：签到路径会用同一个窗口重写 pool 里的 expiring，
+	// 两边不同口径会让面板数字在「用户选的 7 天」与「硬编码 1 天」之间来回跳。
+	expDays := cfg.ExpiringThresholdDays()
 	for _, s := range []*scheduler.Scheduler{
 		wbSch, trSch, qdSch, wbaSch, qwSch, qcnSch, qcmSch, mcSch,
 		rcSch, lmSch, oaSch, mimSch, lobSch, zcdSch, gemSch, caSch, glmSch,
 	} {
 		s.SetCheckinEnabled(cfg.Features.CheckinEnabled)
+		s.SetExpiringDays(expDays)
 	}
 
 	// 查看器运行时：只有账号池、查询客户端与静态兜底表，没有转发 Handler。

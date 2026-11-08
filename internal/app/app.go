@@ -2052,7 +2052,7 @@ func (a *App) refreshIfSessionDead(rt *Runtime, au *auth.Auth, err error) bool {
 // creditSnapshot 实时拉取明细并算出「可消耗余额」「临期额度」「不可消耗余额」三口径，
 // 成功即回写 pool 快照 + ledger 差分。三者同源于 UserResourceDetail 的单次响应：remain 即
 // pool 路由口径的可消耗余额，临期额度为其中本仓可配天数内到期的部分（config.ExpiringThresholdDays()，
-// 面板下拉 1/2/3 天；**仅展示**，上游 R112 起不参与选号），不可消耗部分由条目的 Usable 标记
+// 面板下拉 1/2/7 天；**仅展示**，上游 R112 起不参与选号），不可消耗部分由条目的 Usable 标记
 // 汇总得到（渠道不区分专用池时为 0；渠道不下发到期时间时临期为 0，如 Qoder）。
 // 同一响应里还算出「最早到期时刻」一并写入 pool——那是 Pick() 的唯一排序键。
 // 遇 401 自动刷新 token 并重试一次（见 refreshIfSessionDead）。
@@ -2070,8 +2070,8 @@ func (a *App) creditSnapshot(rt *Runtime, au *auth.Auth) (remain int64, items []
 		return 0, nil, 0, 0, err
 	}
 	_, unusable = provider.Summarize(items)
-	// 临期额度：自然日口径（本仓面板可配 1/2/3 天，见 SetExpiringDays；次日 00:00 失效算今日）。
-	// 上游 R112 把它固定成 provider.ExpiringDays=1 且只作展示；本仓保留可配是因为面板有下拉框。
+	// 临期额度：自然日口径（本仓面板可配 1/2/7 天，见 SetExpiringDays；次日 00:00 失效算今日）。
+	// 上游 R112 把它固定成 provider.ExpiringDays=1 且只作展示；R112b 又恢复成 1/2/7 可配。
 	// R112 起**仅展示**（面板三口径/汇总条），不参与选号——选号用下面的 earliest。
 	now := time.Now()
 	expiring = provider.ExpiringWithinDays(items, a.cfg.ExpiringThresholdDays(), now)
@@ -2357,12 +2357,12 @@ func (a *App) SetCheckinTimes(times []string) error {
 // SetExpiringDays 更新临期阈值（自然日数）：保存配置并在下次余额刷新时重算 expiring 字段。
 //
 // ⚠️ 语义已收窄（上游 R112 之后）：**只决定面板「临期额度」这一列统计多少个自然日**，
-// 选号早已改按「最早到期时刻升序」（pool.Pick 不再读 expiring）。上游删掉了这个开关、
-// 固定成 provider.ExpiringDays=1；本仓面板保留三级下拉（1/2/3）故继续提供该端点。
-// 仅支持 1/2/3 天（UI 下拉框限定；自然日粒度下低于一天无意义，故下限 1）。
+// 选号早已改按「最早到期时刻升序」（pool.Pick 不再读 expiring）。
+// 上游 R112b 把该窗口恢复成可配的 1/2/7，本仓面板同步为同三档下拉。
+// 仅支持 1/2/7 天（UI 下拉框限定；自然日粒度下低于一天无意义，故下限 1）。
 func (a *App) SetExpiringDays(days int) error {
-	if days != 1 && days != 2 && days != 3 {
-		return errors.New("临期阈值仅支持 1/2/3 天")
+	if days != 1 && days != 2 && days != 7 {
+		return errors.New("临期阈值仅支持 1/2/7 天")
 	}
 	a.mu.Lock()
 	a.cfg.Schedule.ExpiringThresholdHours = days * 24
@@ -2371,6 +2371,12 @@ func (a *App) SetExpiringDays(days int) error {
 	a.mu.Unlock()
 	if err != nil {
 		return err
+	}
+	// 下发给调度器：签到路径会用同一个窗口重算 expiring 并写回 pool。
+	for _, rt := range a.runtimesSnapshot() {
+		if rt != nil && rt.Scheduler != nil {
+			rt.Scheduler.SetExpiringDays(days)
+		}
 	}
 	log.Printf("临期阈值已更新：%d 天", days)
 	return nil
@@ -2684,7 +2690,7 @@ type ModelCoolView struct {
 type State struct {
 	Accounts     []AccountView `json:"accounts"`
 	CheckinTimes []string      `json:"checkin_times"`
-	ExpiringDays int           `json:"expiring_days"` // 临期展示窗口（天），仅支持 1/2/3
+	ExpiringDays int           `json:"expiring_days"` // 临期展示窗口（天），仅支持 1/2/7
 	ListenHost   string        `json:"listen_host"`
 	ListenPort   int           `json:"listen_port"`
 
@@ -3243,6 +3249,10 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 			apiError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// 面板立刻可见：expiring 是刷新时算出来的标量，改完窗口必须重算一次。
+		// 异步执行，避免设置弹层等全部账号的上游请求；若已有刷新在跑，本次返回 Busy，
+		// 由下一轮定时刷新兜底。
+		a.safeGo(func() { a.RefreshAll() })
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("POST /api/config/checkin_enabled", func(w http.ResponseWriter, r *http.Request) {

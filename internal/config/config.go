@@ -134,11 +134,12 @@ type Config struct {
 	Schedule struct {
 		CheckinHours []int    `json:"checkin_hours,omitempty"` // 旧格式：[9,21]
 		CheckinTimes []string `json:"checkin_times,omitempty"` // 新格式：["09:00","21:30"]
-		// ExpiringThresholdHours 临期展示窗口（小时，本仓独有；上游 R112 已删该开关）。
+		// ExpiringThresholdHours 临期展示窗口（小时，本仓独有；上游 R112 已删该开关，
+		// R112b 又以 expiring_days 的形式恢复成 1/2/7）。
 		//
 		// ⚠️ 两侧语义不同、互不冲突：上游 R112 让**选号**改按「最早到期时刻升序」，
 		// 不再需要「N 天内算临期」；本仓保留它是给**面板**用的——「临期额度」这列
-		// 按用户选的天数（1/2/3）统计，见 ExpiringThresholdDays / POST /api/config/expiring_days。
+		// 按用户选的天数（1/2/7）统计，见 ExpiringThresholdDays / POST /api/config/expiring_days。
 		// 选号完全不读本字段，故保留不构成对 R112 的偏离。
 		ExpiringThresholdHours int `json:"expiring_threshold_hours,omitempty"`
 	} `json:"schedule"`
@@ -176,14 +177,14 @@ type Config struct {
 	ExpiringThresholdDur time.Duration `json:"-"`
 }
 
-// ExpiringThresholdDays 临期展示窗口（自然日数，1/2/3）。
+// ExpiringThresholdDays 临期展示窗口（自然日数，1/2/7）。
 //
 // 2026-10-19 起临期判定统一用**自然日**口径：days 个自然日内到期
 // （次日 00:00 失效算今日，见 provider.ExpireWithinDays）。
 // 由 ExpiringThresholdHours 换算；非整日时向上取整（保守，宁可提前预警）。
 //
 // ⚠️ 上游 R112 把选号改成「最早到期时刻升序」，这个天数**只影响面板「临期额度」列**；
-// 本仓保留可配是因为面板有 1/2/3 下拉框（上游已删该开关、固定成 provider.ExpiringDays=1）。
+// 上游 R112b 又把该窗口恢复成可配的 1/2/7，本仓面板同步为同三档下拉。
 func (c *Config) ExpiringThresholdDays() int {
 	h := c.Schedule.ExpiringThresholdHours
 	if h <= 0 {
@@ -346,12 +347,15 @@ func (c *Config) normalize() error {
 	if c.Upstream.TimeoutSeconds <= 0 {
 		c.Upstream.TimeoutSeconds = 120
 	}
-	// 临期阈值：默认 24h，下限 24h（日期粒度的到期判定低于一天没有意义）。
-	if c.Schedule.ExpiringThresholdHours <= 0 {
+	// 临期阈值：面板只提供 1/2/7 天三档（与上游 R112b 同口径），故这里把小时数归一到
+	// 24/48/168。历史配置里出现过的 72（3 天）等旧值按「就近取大」处理：宁可窗口宽一点
+	// 多提醒，也不要漏掉即将作废的额度。
+	if c.Schedule.ExpiringThresholdHours <= 24 {
 		c.Schedule.ExpiringThresholdHours = 24
-	}
-	if c.Schedule.ExpiringThresholdHours < 24 {
-		c.Schedule.ExpiringThresholdHours = 24
+	} else if c.Schedule.ExpiringThresholdHours <= 48 {
+		c.Schedule.ExpiringThresholdHours = 48
+	} else {
+		c.Schedule.ExpiringThresholdHours = 168
 	}
 	c.ExpiringThresholdDur = time.Duration(c.Schedule.ExpiringThresholdHours) * time.Hour
 	if c.Listen.Port <= 0 {

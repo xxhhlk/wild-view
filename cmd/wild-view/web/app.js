@@ -292,9 +292,16 @@ function renderCreditDetail() {
   if (!d || !d.items || !d.items.length) return;
 
   const items = d.items.slice();
-  // 临期判定与后端 ExpiringWithin 同口径：北京时间墙钟 now + 阈值天数，到期日当天零点前即临期。
+  // 临期判定与后端 provider.ExpireWithinDays 同口径：**自然日**粒度，今天算第 1 天。
+  //   days=1 → 只算今天到期；days=7 → 今天起 7 个自然日内（含第 7 天全天）。
+  // 旧实现用 now + days*24h 的滚动窗口，比后端宽一天（1 天窗口会把明早到期的也算进来），
+  // 于是明细里的「临期」角标与卡片上的「临期额度」对不上。
   const expDays = state.expiring_days || 1;
-  const expDeadline = Date.now() + expDays * 24 * 3600 * 1000;
+  const DAY_MS = 24 * 3600 * 1000;
+  // UTC+8 当日零点对应的 UTC 毫秒（与下方 expireAnchorUtc 的日期分支同一锚点）。
+  const utc8DayStart = (ms) => Math.floor((ms + 8 * 3600 * 1000) / DAY_MS) * DAY_MS - 8 * 3600 * 1000;
+  const expDeadline = utc8DayStart(Date.now()) + (expDays - 1) * DAY_MS;
+  const withinExpiring = (utc) => utc8DayStart(utc) <= expDeadline;
   // expireAnchorUtc 到期锚点的真实 UTC 毫秒，与后端 provider.expireAnchor 同口径：
   //   日期粒度（YYYY-MM-DD）= UTC+8 该日零点（后端「到期日 ≤ 明天」的宽松判据）；
   //   RFC3339 = 精确时刻（如 gemini 的 5 小时/周配额窗口重置时间）。
@@ -312,7 +319,7 @@ function renderCreditDetail() {
     const ms = expireAnchorUtc(it.expire_at);
     return ms === null ? Infinity : ms;
   };
-  const groupOf = (it) => (it.usable && it.remain > 0) ? (expUtcOf(it) < expDeadline ? 0 : 1) : 2;
+  const groupOf = (it) => (it.usable && it.remain > 0) ? (withinExpiring(expUtcOf(it)) ? 0 : 1) : 2;
   items.sort((a, b) => groupOf(a) - groupOf(b) || expUtcOf(a) - expUtcOf(b));
   const pages = Math.max(1, Math.ceil(items.length / DETAIL_PAGE_SIZE));
   const page = Math.min(Math.max(0, detailState.page), pages - 1);
@@ -353,7 +360,7 @@ function renderCreditDetail() {
     if (it.usable && it.remain > 0 && it.expire_at) {
       const expUtc = expireAnchorUtc(it.expire_at);
       if (expUtc !== null) {
-        if (expUtc < expDeadline) {
+        if (withinExpiring(expUtc)) {
           expCell = `${esc(it.expire_at)}<span class="detail-exp-tag" title="${expDays} 天内到期，优先消耗">临期</span>`;
           expCellCls = ' class="detail-exp"';
           cls = ' class="detail-exp-row"';
@@ -1492,7 +1499,7 @@ async function saveSettings() {
     } catch (e) { toast(e.message); closeSettings(); showLogin("管理密码已变更，请重新登录"); return; }
   }
 
-  // 2) 临期阈值（1/2/3 天，独立端点即时生效）
+  // 2) 临期阈值（1/2/7 天，独立端点即时生效）
   const expDays = parseInt($("selExpiring").value, 10) || 1;
   if (expDays !== (state.expiring_days || 1)) {
     try {

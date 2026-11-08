@@ -300,13 +300,13 @@
         </div>
         <div class="hint">下次定时检查 <span id="nextCheckin">-</span></div>
         <div class="row" style="margin-top:8px">
-          <label class="lbl wide" title="到期日在此范围内的积分视为临期，调度器优先消耗，减少到期作废">临期阈值</label>
+          <label class="lbl wide" title="到期日在此范围内的积分计入「临期额度」，并在明细里标为临期">临期阈值</label>
           <select id="selExpiring" class="input" style="width:100px">
             <option value="1">1 天</option>
             <option value="2">2 天</option>
-            <option value="3">3 天</option>
+            <option value="7">7 天</option>
           </select>
-          <span class="hint" style="margin-left:8px">该范围内到期的积分优先消耗</span>
+          <span class="hint" style="margin-left:8px">统计该范围内到期的积分（今天算第 1 天）</span>
         </div>
         <div class="row" style="margin-top:8px">
           <label class="lbl wide">开机自启</label>
