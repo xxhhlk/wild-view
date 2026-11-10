@@ -58,7 +58,7 @@ import (
 // ⚠️ 这是**唯一**来源：发版时先把这里改掉再打 tag，否则面板顶栏、macOS 的
 // CFBundleShortVersionString 与 dmg 文件名都会停在旧版本（历史上就出现过
 // tag 是 v2.10.0、面板却显示 0.1.0 的情况）。
-const Version = "2.12.0"
+const Version = "2.13.0"
 
 const (
 	loginTimeout   = 5 * time.Minute
