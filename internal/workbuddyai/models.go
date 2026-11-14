@@ -14,6 +14,7 @@ import (
 
 	"wild-view/internal/auth"
 	"wild-view/internal/provider"
+	"wild-view/internal/reasoning"
 )
 
 // catalogModel 目录原始模型条目。
@@ -90,6 +91,12 @@ type catalogCache struct {
 	colors  map[string]string
 	fetched time.Time
 
+	// v2Down 记录 /v2/enterprises/personal/models 已不可用（2026-11-14 起实测
+	// 404 Route Not Found，三个账号一致），此后直接走 v3，避免每轮刷新先撞一次 404。
+	// 到期后重探一次：上游若恢复 v2，自动切回（v2 有 v3 缺的能力字段）。
+	v2Down    bool
+	v2RetryAt time.Time
+
 	v3        []catalogModel // /v3/config 全量模型面（不过滤）
 	v3OK      bool           // v3 探测是否成功过（失败不写缓存，避免负缓存住坏结果）
 	v3Fetched time.Time
@@ -97,9 +104,16 @@ type catalogCache struct {
 
 const catalogTTL = 10 * time.Minute
 
+// v2RetryInterval 判定 v2 下线后，多久再重探一次。
+const v2RetryInterval = 30 * time.Minute
+
 var cache catalogCache
 
 // fetchCatalog 拉取目录（带 10 分钟缓存），返回 cli agent 过滤后的模型列表。
+//
+// 主源是 /v2/enterprises/personal/models；它 404 时（2026-11-14 起上游已下线，
+// 见 v2Down 注释）自动改用 /v3/config —— 两者 data 结构同形（models / agents /
+// modelPromotions 字段名一致），解析逻辑可完全共用。
 func (c *Client) fetchCatalog(a *auth.Auth) ([]catalogModel, error) {
 	cache.mu.RLock()
 	if len(cache.models) > 0 && time.Since(cache.fetched) < catalogTTL {
@@ -109,31 +123,9 @@ func (c *Client) fetchCatalog(a *auth.Auth) ([]catalogModel, error) {
 	}
 	cache.mu.RUnlock()
 
-	req, err := http.NewRequest(http.MethodGet, c.base()+EpCatalog, nil)
+	env, fromV3, err := c.fetchCatalogEnv(a)
 	if err != nil {
 		return nil, err
-	}
-	commonHeaders(req)
-	req.Header.Set("Authorization", "Bearer "+a.AccessToken)
-	req.Header.Set("Accept", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != http.StatusOK {
-		// 类型化错误：上层靠 errors.As 取分类才能 refresh + 重试（不变量 19），
-		// 裸 fmt.Errorf 会让模型/费率面的 401 自愈永远不生效（R79）。
-		return nil, &provider.Error{Kind: Classify(resp.StatusCode, string(raw)), Status: resp.StatusCode,
-			Msg: fmt.Sprintf("models api: %s", truncate(string(raw), 200))}
-	}
-	var env catalogResp
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, fmt.Errorf("models parse: %w", err)
-	}
-	if env.Code != 0 {
-		return nil, fmt.Errorf("models api code=%d", env.Code)
 	}
 
 	// cli agent 的模型 ID 顺序为准；models[] 提供元数据。
@@ -188,8 +180,116 @@ func (c *Client) fetchCatalog(a *auth.Auth) ([]catalogModel, error) {
 
 	cache.mu.Lock()
 	cache.models, cache.promo, cache.badges, cache.colors, cache.fetched = out, promo, badges, colors, time.Now()
+	// v3 兜底时把同一份响应灌进 v3 缓存，FetchModels/FetchModelPricing 的
+	// mergeV3 就不会再打一次同一个端点。
+	if fromV3 {
+		cache.v3, cache.v3OK, cache.v3Fetched = env.Data.Models, true, time.Now()
+	}
 	cache.mu.Unlock()
 	return out, nil
+}
+
+// fetchCatalogEnv 请求目录接口：v2 优先，404 后切 v3（并记住，避免每轮先撞 404）。
+// 其它错误（网络、401）原样返回，不做源切换 —— 那类失败换端点救不回来。
+func (c *Client) fetchCatalogEnv(a *auth.Auth) (catalogResp, bool, error) {
+	cache.mu.RLock()
+	down, retryAt := cache.v2Down, cache.v2RetryAt
+	cache.mu.RUnlock()
+
+	if !down || time.Now().After(retryAt) {
+		env, status, err := c.getCatalog(a, EpCatalog, false)
+		switch {
+		case err == nil:
+			if down {
+				cache.mu.Lock()
+				cache.v2Down, cache.v2RetryAt = false, time.Time{}
+				cache.mu.Unlock()
+			}
+			return env, false, nil
+		case status == http.StatusNotFound:
+			cache.mu.Lock()
+			cache.v2Down, cache.v2RetryAt = true, time.Now().Add(v2RetryInterval)
+			cache.mu.Unlock()
+		default:
+			return catalogResp{}, false, err
+		}
+	}
+
+	env, _, err := c.getCatalog(a, EpCatalogV3, true)
+	if err != nil {
+		return catalogResp{}, false, err
+	}
+	enrichV3Capabilities(env.Data.Models)
+	return env, true, nil
+}
+
+// enrichV3Capabilities 补 v3 面缺的能力字段。
+//
+// /v3/config 的 models[] 不带 supportsReasoning / reasoning 档位（v2 带），
+// 直接切源会把「支持思考」全部判成 false —— 面板的推理图标、/v1/models 的
+// reasoning 能力声明都会消失。这里用 reasoning 静态表（官方客户端逆向 + 真实
+// 账号复核）按「有可枚举档位即支持推理」补齐；静态表没有的品牌保持 false，
+// 不猜。
+func enrichV3Capabilities(models []catalogModel) {
+	if !reasoning.SupportsEffortKind(ChannelName) {
+		return
+	}
+	realm := reasoning.RealmForKind(ChannelName)
+	for i := range models {
+		cap, ok := reasoning.Caps.Lookup(realm, models[i].ID)
+		if !ok {
+			continue
+		}
+		if len(cap.Efforts) > 0 {
+			models[i].SupportsReasoning = true
+		}
+		if len(models[i].Reasoning.SupportedEfforts) == 0 && len(cap.Efforts) > 0 {
+			models[i].Reasoning.SupportedEfforts = append([]string(nil), cap.Efforts...)
+			models[i].Reasoning.DefaultEffort = cap.DefaultEffort
+			models[i].Reasoning.CanDisableThinking = cap.SupportsDisable
+		}
+	}
+}
+
+// getCatalog 请求一个目录端点并解析外层信封。status 供调用方判 404。
+func (c *Client) getCatalog(a *auth.Auth, path string, cliUA bool) (catalogResp, int, error) {
+	req, err := http.NewRequest(http.MethodGet, c.base()+path, nil)
+	if err != nil {
+		return catalogResp{}, 0, err
+	}
+	commonHeaders(req)
+	req.Header.Set("Authorization", "Bearer "+a.AccessToken)
+	req.Header.Set("Accept", "application/json")
+	if cliUA {
+		// /v3/config 有 UA 门禁：web UA → 400 code=12403 "check ua"。
+		req.Header.Set("User-Agent", clientUA)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return catalogResp{}, 0, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != http.StatusOK {
+		// 类型化错误：上层靠 errors.As 取分类才能 refresh + 重试（不变量 19），
+		// 裸 fmt.Errorf 会让模型/费率面的 401 自愈永远不生效（R79）。
+		label := "models api"
+		if path == EpCatalogV3 {
+			label = "v3 config"
+		}
+		return catalogResp{}, resp.StatusCode, &provider.Error{
+			Kind: Classify(resp.StatusCode, string(raw)), Status: resp.StatusCode,
+			Msg: fmt.Sprintf("%s: %s", label, truncate(string(raw), 200)),
+		}
+	}
+	var env catalogResp
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return catalogResp{}, resp.StatusCode, fmt.Errorf("models parse: %w", err)
+	}
+	if env.Code != 0 {
+		return catalogResp{}, resp.StatusCode, fmt.Errorf("models api code=%d", env.Code)
+	}
+	return env, resp.StatusCode, nil
 }
 
 // fetchV3Catalog 抓取 /v3/config 全量模型面（2026-09-28 实测，issue #39）。
