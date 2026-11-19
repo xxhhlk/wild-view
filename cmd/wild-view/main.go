@@ -422,8 +422,11 @@ func main() {
 	// 窗口内每分钟重试既无意义又违反 §0.1；每个签到时刻单次尝试即可。
 	// KeepaliveHours 仍为显式空切片：**上游无 refresh 端点**（session 14 天，到期需重新登录/导入），
 	// 保活没有可刷的东西（refreshToken 为空，调度器会跳过并只记一条日志）。
+	// 宠物打工按档位发放，一天可领多档（注释见 checkin.go:92「每天最多 3 次」）——
+	// MultiCheckinPerDay 关闭跨时间点去重，让 09:00/21:00 等各签到时刻分别领一档。
 	lmSch := scheduler.New(scheduler.Config{Pool: lmPool, Upstream: lmUp, Name: "loomy",
-		CheckinMinutes: checkinMinutes, FollowGlobalCheckin: true, KeepaliveHours: []int{}, Ledger: lg})
+		CheckinMinutes: checkinMinutes, FollowGlobalCheckin: true, KeepaliveHours: []int{}, Ledger: lg,
+		MultiCheckinPerDay: true})
 	// OfficeAce：有每日签到（bonus/claim）但要先有临时凭据（V11 签名），保活用于续期。
 	// CheckinMinutes 用全局签到时间；KeepaliveHours 用配置保活时段（临时凭据约 2h 到期）。
 	oaSch := scheduler.New(scheduler.Config{Pool: oaPool, Upstream: oaUp, Name: "officeace",
