@@ -515,6 +515,9 @@ type CheckinResult struct {
 	Msg       string `json:"msg"`
 	Remain    int64  `json:"remain"`
 	HasRemain bool   `json:"has_remain"`
+	// Paused 本次签到因账号级「暂停签到」而未向供应商发起请求。
+	// 与失败区分：面板/toast 显示「已暂停」而不是「签到失败」，批量统计不计入失败。
+	Paused bool `json:"paused,omitempty"`
 	// Retryable 报告本次签到未达成（no_campaign/error 等），应在当日窗口内继续重试。
 	// 仅由支持结构化结果的渠道（provider.CheckinReporter）给出；其它渠道恒为 false。
 	Retryable bool `json:"retryable"`
@@ -600,6 +603,14 @@ func (s *Scheduler) checkinOne(uid string) CheckinResult {
 	a := s.cfg.Pool.AuthByUID(uid)
 	if a == nil {
 		return s.finishCheckin(uid, CheckinResult{UID: uid, Msg: "unknown account", Retryable: true})
+	}
+	// 账号级「暂停签到」门禁：所有签到路径（定时批次、手动单账号、批量）都经
+	// checkinOne，在这里统一拦截才不会出现某条路径绕过。暂停期间不碰供应商，
+	// 也不记签到状态/不标完成（Paused=True、Retryable=False、checkinDone=False）。
+	// 与 Disabled（路由停用）分离：那只影响 API 选号，这里只停签到。
+	if st, ok := s.cfg.Pool.Status(uid); ok && st.CheckinDisabled {
+		log.Printf("checkin paused platform=%s uid=%s", name, uid)
+		return CheckinResult{UID: uid, Msg: "已暂停签到", Paused: true}
 	}
 	// ⚠️「无凭据」判定**不能只看 refresh token**（2026-10-17 修）。
 	//

@@ -606,9 +606,11 @@ function renderAccounts() {
     // 显示绿色「签到成功」。
     const checkinTag = noCheckin
       ? `<span class="tag neutral" title="${esc(noCheckinTitle)}">${noCheckinText(a.group)}</span>`
-      : a.last_checkin_at
-        ? `<span class="tag ${a.last_checkin_ok ? "ok" : "bad"}">${a.last_checkin_ok ? "签到成功" : "签到失败"}</span>`
-        : '<span class="tag neutral">未签到</span>';
+      : a.checkin_disabled
+        ? '<span class="tag neutral" title="该账号已暂停签到，恢复后照常定时签到">已暂停签到</span>'
+        : a.last_checkin_at
+          ? `<span class="tag ${a.last_checkin_ok ? "ok" : "bad"}">${a.last_checkin_ok ? "签到成功" : "签到失败"}</span>`
+          : '<span class="tag neutral">未签到</span>';
 
     const disabledClass = a.disabled ? " disabled" : "";
 
@@ -618,13 +620,18 @@ function renderAccounts() {
     // until 由后端 fmtTime 预格式化为 "01-02 15:04"，为空则退化为「冷却中」。
     const coolingTag = "";
     const coolingClass = "";
-    const checkinBtn = noCheckin
-      ? `<span class="icon-op off" title="${esc(noCheckinTitle)}" onclick="return false">✓</span>`
+    const checkinBtn = noCheckin || a.checkin_disabled
+      ? `<span class="icon-op off" title="${a.checkin_disabled ? "已暂停签到，点 ⏸ 恢复" : esc(noCheckinTitle)}" onclick="return false">✓</span>`
       : `<span class="icon-op" title="签到" onclick="checkin('${a.uid}')">✓</span>`;
+    // 账号级签到暂停：只停该账号的定时/手动签到，不影响 API 路由与余额刷新。
+    // 无签到活动的渠道（qoder/workbuddyai/glm/…）没有签到可暂停，不显示按钮。
+    const pauseBtn = noCheckin ? "" : a.checkin_disabled
+      ? `<span class="icon-op" title="恢复该账号签到" onclick="toggleCheckinPaused('${a.uid}', false)">▶</span>`
+      : `<span class="icon-op" title="暂停该账号签到" onclick="toggleCheckinPaused('${a.uid}', true)">⏸</span>`;
 
     // 无积分渠道（历史数据）只隐藏「刷新积分」，其余账号操作照常。
     const noCredits = hasNoCredits(a.group);
-    const ops = `${checkinBtn}
+    const ops = `${checkinBtn}${pauseBtn}
           ${noCredits ? "" : `<span class="icon-op" title="刷新积分" onclick="refreshOne('${a.uid}')">↻</span>`}
           <span class="icon-op danger" title="删除账号" onclick="removeAcct('${a.uid}')">✕</span>`;
     const nameHtml = `<span class="acct-name editable" title="点击修改显示名" onclick="openRename('${a.uid}','${esc(a.nickname || shortUid(a.uid)).replace(/'/g, "&#39;")}')">${esc(a.nickname || shortUid(a.uid))}</span>`;
@@ -828,6 +835,14 @@ async function checkin(uid) {
   } catch (e) { toast(e.message); }
 }
 
+async function toggleCheckinPaused(uid, paused) {
+  try {
+    await api("/api/account/checkin_disabled", { uid, disabled: paused });
+    toast(paused ? "已暂停该账号签到" : "已恢复该账号签到");
+    loadState();
+  } catch (e) { toast(e.message); }
+}
+
 async function refreshOne(uid) {
   try {
     const r = await api("/api/account/refresh", { uid });
@@ -855,9 +870,11 @@ async function checkinAll() {
     detailCache = {}; // 批量签到改变余额，全部明细缓存作废
     const ok = (r.results || []).filter((x) => x.ok).length;
     const pending = (r.results || []).filter((x) => !x.ok && x.retryable).length;
+    const paused = (r.results || []).filter((x) => x.paused).length;
     const skip = (state.accounts || []).filter((a) => noExplicitCheckin(a.group)).length;
     const total = (r.results || []).length + skip;
     const parts = [skip ? `成功 ${ok} / ${total}（${skip} 个无签到活动跳过）` : `成功 ${ok} / 共 ${total}`];
+    if (paused) parts.push(`${paused} 个已暂停签到`);
     if (pending) parts.push(`${pending} 个未领到将在窗口内自动重试`);
     toast(`批量签到完成：${parts.join("；")}`);
     loadState();

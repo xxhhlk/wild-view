@@ -1967,6 +1967,18 @@ func (a *App) CheckinAccount(uid string) (scheduler.CheckinResult, error) {
 	return res, nil
 }
 
+// SetAccountCheckinDisabled 暂停/恢复某账号的签到（账号级签到控制）。
+// 不复用 SetAccountDisabled：后者会连 API 路由一起停用，这里只停签到。
+func (a *App) SetAccountCheckinDisabled(uid string, disabled bool) error {
+	rt, _ := a.findRuntimeAuth(uid)
+	if rt == nil || rt.Pool == nil {
+		return fmt.Errorf("unknown account %s", uid)
+	}
+	rt.Pool.SetCheckinDisabled(uid, disabled)
+	log.Printf("account checkin disabled=%t uid=%s", disabled, uid)
+	return nil
+}
+
 // CheckinAll 全部账号立即签到。
 func (a *App) CheckinAll() []scheduler.CheckinResult {
 	results := make([]scheduler.CheckinResult, 0)
@@ -1990,13 +2002,15 @@ func (a *App) CheckinAll() []scheduler.CheckinResult {
 			results = append(results, res)
 		}
 	}
-	ok := 0
+	ok, paused := 0, 0
 	for _, r := range results {
-		if r.OK {
+		if r.Paused {
+			paused++
+		} else if r.OK {
 			ok++
 		}
 	}
-	log.Printf("批量签到完成：total=%d ok=%d failed=%d", len(results), ok, len(results)-ok)
+	log.Printf("批量签到完成：total=%d ok=%d paused=%d failed=%d", len(results), ok, paused, len(results)-ok-paused)
 	return results
 }
 
@@ -2660,12 +2674,14 @@ type AccountView struct {
 	// ModelCooling 该账号上处于冷却的模型（上游按模型独立限流）。
 	// 与 Cooling/Reason 分开：非空不代表账号整体不可用，其他模型仍可路由，
 	// 合并展示会让用户误以为整个账号被限流。
-	ModelCooling   []ModelCoolView `json:"model_cooling,omitempty"`
-	Disabled       bool            `json:"disabled"`
-	ErrCount       int             `json:"err_count"`
-	LastCheckinOK  bool            `json:"last_checkin_ok"`
-	LastCheckinAt  string          `json:"last_checkin_at"`
-	LastCheckinMsg string          `json:"last_checkin_msg"`
+	ModelCooling []ModelCoolView `json:"model_cooling,omitempty"`
+	Disabled     bool            `json:"disabled"`
+	// CheckinDisabled 账号级签到暂停，面板显示「已暂停签到」并灰掉签到按钮。
+	CheckinDisabled bool   `json:"checkin_disabled,omitempty"`
+	ErrCount        int    `json:"err_count"`
+	LastCheckinOK   bool   `json:"last_checkin_ok"`
+	LastCheckinAt   string `json:"last_checkin_at"`
+	LastCheckinMsg  string `json:"last_checkin_msg"`
 	// SessionDead 登录态失效（401/登录已失效）：面板显示「需重新登录」+ 重新登录入口（#134）。
 	SessionDead       bool   `json:"session_dead,omitempty"`
 	SessionDeadReason string `json:"session_dead_reason,omitempty"`
@@ -2773,6 +2789,7 @@ func (a *App) accountViews() []AccountView {
 			Reason:            s.Reason,
 			ModelCooling:      modelCoolViews(s.ModelCooling),
 			Disabled:          s.Disabled,
+			CheckinDisabled:   s.CheckinDisabled,
 			ErrCount:          s.ErrCount,
 			LastCheckinOK:     s.LastCheckinOK,
 			LastCheckinAt:     fmtTime(s.LastCheckinAt),
@@ -3320,6 +3337,19 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	// 账号级签到暂停：只停签到，不影响 API 路由与余额刷新。
+	mux.HandleFunc("POST /api/account/checkin_disabled", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			UID      string `json:"uid"`
+			Disabled bool   `json:"disabled"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := a.SetAccountCheckinDisabled(req.UID, req.Disabled); err != nil {
+			apiError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "checkin_disabled": req.Disabled})
 	})
 	mux.HandleFunc("GET /api/fees", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.FeesInfo())

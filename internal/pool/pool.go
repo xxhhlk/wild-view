@@ -73,12 +73,16 @@ type Status struct {
 	// ModelCooling 该账号上处于冷却的模型（上游按模型独立限流）。
 	// 与 Cooling/Reason 分开：非空不代表账号整体不可用，其他模型仍可路由，
 	// 合并展示会让用户误以为整个账号被限流。
-	ModelCooling   []ModelCoolStatus `json:"model_cooling,omitempty"`
-	Disabled       bool              `json:"disabled"`
-	ErrCount       int               `json:"err_count,omitempty"`
-	LastCheckinOK  bool              `json:"last_checkin_ok,omitempty"`
-	LastCheckinAt  time.Time         `json:"last_checkin_at,omitempty"`
-	LastCheckinMsg string            `json:"last_checkin_msg,omitempty"`
+	ModelCooling []ModelCoolStatus `json:"model_cooling,omitempty"`
+	Disabled     bool              `json:"disabled"`
+	// CheckinDisabled 账号级签到暂停（用户控制项）。
+	// 与 Disabled（停用账号，API 路由也不选它）分离：暂停签到只停定时/手动签到，
+	// 账号仍能正常参与 API 路由与余额刷新。零值=false = 照常签到（向后兼容）。
+	CheckinDisabled bool      `json:"checkin_disabled,omitempty"`
+	ErrCount        int       `json:"err_count,omitempty"`
+	LastCheckinOK   bool      `json:"last_checkin_ok,omitempty"`
+	LastCheckinAt   time.Time `json:"last_checkin_at,omitempty"`
+	LastCheckinMsg  string    `json:"last_checkin_msg,omitempty"`
 	// SessionDead 登录态失效（401/登录已失效）：挑号跳过 + 面板「需重新登录」徽标（#134）。
 	// 与 Disabled（用户手动停用）分离，避免机器状态混入用户控制项。
 	SessionDead       bool   `json:"session_dead,omitempty"`
@@ -111,9 +115,11 @@ type entry struct {
 	// 仅影响面板展示，不参与 Pick() 路由。
 	creditsStale bool
 	disabled     bool
-	reason       string
-	until        time.Time
-	errCount     int
+	// checkinDisabled 账号级签到暂停，与 disabled（路由停用）分离。
+	checkinDisabled bool
+	reason          string
+	until           time.Time
+	errCount        int
 	// modelUntil 模型级冷却：模型名（去渠道前缀后、与出站 body 的 model 同值）→ 该模型上的冷却。
 	// 与 until 的分工见 CooldownModel；nil 表示当前无任何模型级冷却。
 	modelUntil map[string]modelCool
@@ -157,6 +163,8 @@ type stateFile struct {
 // stateVersion 当前状态文件格式版本。
 // v2: unusable（可用/不可用拆分）；v3: expiring（临期额度）；v4: model_until（模型级冷却）；
 // v5: session_dead（登录态失效标记，纯新增可选字段，不改变余额口径）。
+// checkin_disabled（账号级签到暂停）不 bump：纯新增可选字段，零值=false 与老文件
+// 完全等价（老账号照常签到），且不改变余额口径——bump 反而会让所有账号白闪一次待刷新。
 const stateVersion = 5
 
 // creditsLayoutVersion 余额口径版本：v3 起含 expiring（临期）字段，口径与更早版本不同。
@@ -174,6 +182,7 @@ type accountState struct {
 	EarliestExpireUnix int64                `json:"earliest_expire,omitempty"`
 	ModelUntil         map[string]modelCool `json:"model_until,omitempty"`
 	Disabled           bool                 `json:"disabled"`
+	CheckinDisabled    bool                 `json:"checkin_disabled,omitempty"`
 	Reason             string               `json:"reason,omitempty"`
 	Until              time.Time            `json:"until,omitempty"`
 	LastCheckinOK      bool                 `json:"last_checkin_ok,omitempty"`
@@ -433,6 +442,17 @@ func (p *Pool) SetDisabled(uid string, d bool) {
 	p.saveLocked()
 }
 
+// SetCheckinDisabled 设置账号级签到暂停。与 SetDisabled（路由停用）完全独立：
+// 这里只影响定时/手动签到是否向供应商发起请求，不影响账号作为 API 上游被选用。
+func (p *Pool) SetCheckinDisabled(uid string, d bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.byUID[uid]; ok {
+		e.checkinDisabled = d
+	}
+	p.saveLocked()
+}
+
 // ReenableIfCredits 签到后解冻：仅当 remain > 0 且账号处于冷却（非禁用）时恢复。
 // expiring 为临期额度小计（仅展示），unusable 为不可消耗额度小计（仅展示），
 // earliest 为仍有效的最早到期时刻（零值 = 无到期信息）。写入即视为余额口径可信。
@@ -624,6 +644,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		Reason:            e.reason,
 		ModelCooling:      modelCoolingOf(e, now),
 		Disabled:          e.disabled,
+		CheckinDisabled:   e.checkinDisabled,
 		ErrCount:          e.errCount,
 		LastCheckinOK:     e.lastCheckinOK,
 		LastCheckinAt:     e.lastCheckinAt,
@@ -691,6 +712,7 @@ func (p *Pool) load() {
 			earliestExpire:    unixOrZero(s.EarliestExpireUnix),
 			creditsStale:      stale,
 			disabled:          s.Disabled,
+			checkinDisabled:   s.CheckinDisabled,
 			reason:            s.Reason,
 			until:             s.Until,
 			modelUntil:        s.ModelUntil,
@@ -717,6 +739,7 @@ func (p *Pool) saveLocked() {
 			EarliestExpireUnix: zeroOrUnix(e.earliestExpire),
 			ModelUntil:         e.modelUntil,
 			Disabled:           e.disabled,
+			CheckinDisabled:    e.checkinDisabled,
 			Reason:             e.reason,
 			Until:              e.until,
 			LastCheckinOK:      e.lastCheckinOK,
