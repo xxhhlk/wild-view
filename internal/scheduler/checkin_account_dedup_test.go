@@ -172,13 +172,15 @@ func TestMultiCheckinPerDayAcrossSlots(t *testing.T) {
 	}
 }
 
-// TestAllAccountsDayDoneDrivesNextFire 当日全员完成后，触发点为空，
-// 面板「下次签到」与 Run 循环都不再为今天排任何时间点。
+// TestAllAccountsDayDoneDrivesNextFire 当日全员完成后，签到触发点为空，
+// Run 循环不再为今天排签到时刻（保活时段是另一条线，不影响本判定）。
 func TestAllAccountsDayDoneDrivesNextFire(t *testing.T) {
 	up := newPerAccountUpstream(func(uid string) provider.CheckinStatus {
 		return provider.CheckinClaimed // 两个账号都成功
 	})
 	s, _ := newTwoAccountScheduler(up)
+	// NextFire 合并签到与保活；本用例只关心签到，去掉保活时段避免干扰。
+	s.cfg.KeepaliveHours = []int{}
 
 	if s.allAccountsDayDone() {
 		t.Fatal("开局不该是已完成")
@@ -193,8 +195,9 @@ func TestAllAccountsDayDoneDrivesNextFire(t *testing.T) {
 	if got := s.fireMinutes([]int{10 * 60, 21 * 60}); len(got) != 0 {
 		t.Fatalf("当日完成后触发点应为空，实际 %v", got)
 	}
-	if !s.NextFire().IsZero() && s.NextFire().Before(time.Now().Add(12*time.Hour)) {
-		t.Fatalf("下次签到不该排在今天：%v", s.NextFire())
+	// 无签到时段的 NextFire 就是零值（没有保活）——面板据此显示「-」/明天。
+	if nf := s.NextFire(); !nf.IsZero() && nf.Before(time.Now().Add(12*time.Hour)) {
+		t.Fatalf("下次签到不该排在今天：%v", nf)
 	}
 }
 
