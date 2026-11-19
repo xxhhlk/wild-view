@@ -621,19 +621,21 @@ function renderAccounts() {
     const coolingTag = "";
     const coolingClass = "";
     const checkinBtn = noCheckin || a.checkin_disabled
-      ? `<span class="icon-op off" title="${a.checkin_disabled ? "已暂停签到，点 ⏸ 恢复" : esc(noCheckinTitle)}" onclick="return false">✓</span>`
+      ? `<span class="icon-op off" title="${a.checkin_disabled ? "已暂停签到" : esc(noCheckinTitle)}" onclick="return false">✓</span>`
       : `<span class="icon-op" title="签到" onclick="checkin('${a.uid}')">✓</span>`;
-    // 账号级签到暂停：只停该账号的定时/手动签到，不影响 API 路由与余额刷新。
-    // 无签到活动的渠道（qoder/workbuddyai/glm/…）没有签到可暂停，不显示按钮。
-    const pauseBtn = noCheckin ? "" : a.checkin_disabled
-      ? `<span class="icon-op" title="恢复该账号签到" onclick="toggleCheckinPaused('${a.uid}', false)">▶</span>`
-      : `<span class="icon-op" title="暂停该账号签到" onclick="toggleCheckinPaused('${a.uid}', true)">⏸</span>`;
 
     // 无积分渠道（历史数据）只隐藏「刷新积分」，其余账号操作照常。
     const noCredits = hasNoCredits(a.group);
-    const ops = `${checkinBtn}${pauseBtn}
+    const ops = `${checkinBtn}
           ${noCredits ? "" : `<span class="icon-op" title="刷新积分" onclick="refreshOne('${a.uid}')">↻</span>`}
           <span class="icon-op danger" title="删除账号" onclick="removeAcct('${a.uid}')">✕</span>`;
+
+    // 账号级签到暂停：只停该账号的签到，不影响对话与余额刷新。
+    // 刻意放在签到状态标签旁边（而不是顶部图标行，那里挨着「刷新/删除」，
+    // 容易被读成停用整个账号），并用文字而非图标。无签到活动的渠道不显示。
+    const pauseBtn = noCheckin ? "" : a.checkin_disabled
+      ? `<button class="checkin-toggle on" title="恢复该账号的定时与手动签到" onclick="toggleCheckinPaused('${a.uid}', false)">恢复签到</button>`
+      : `<button class="checkin-toggle" title="暂停该账号的定时与手动签到（不影响对话与余额刷新）" onclick="toggleCheckinPaused('${a.uid}', true)">暂停签到</button>`;
     const nameHtml = `<span class="acct-name editable" title="点击修改显示名" onclick="openRename('${a.uid}','${esc(a.nickname || shortUid(a.uid)).replace(/'/g, "&#39;")}')">${esc(a.nickname || shortUid(a.uid))}</span>`;
 
     return `
@@ -650,7 +652,7 @@ function renderAccounts() {
       <div class="acct-uid">UID: ${esc(shortUid(a.uid))}</div>
       <div class="acct-mid">
         <div class="acct-credits" data-uid="${a.uid}"${noCredits ? "" : ` onmouseenter="showCreditDetail(event,'${a.uid}')" onmouseleave="hideCreditDetail()"`}>${creditsText(a)}</div>
-        <div class="acct-checkin">${coolingTag}${checkinTag}${modelCoolingTag(a)}</div>
+        <div class="acct-checkin">${coolingTag}${checkinTag}${modelCoolingTag(a)}${pauseBtn}</div>
       </div>
     </div>`;
   }).join("");

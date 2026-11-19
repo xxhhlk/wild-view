@@ -190,8 +190,13 @@ check("账号卡片已渲染", cards.length > 0);
 check("健康号仍在（未被过滤）", cards.includes("健康号"));
 check("不再渲染路由冷却标签", !/冷却至/.test(cards));
 check("普通账号仍可删除改名", cards.includes("removeAcct(") && cards.includes("openRename("));
-check("可签到账号显示暂停签到按钮", cards.includes("toggleCheckinPaused(") && cards.includes("暂停该账号签到"));
+check("可签到账号显示暂停签到按钮", cards.includes("toggleCheckinPaused(") && cards.includes(">暂停签到<"));
 check("源码接了账号级签到暂停接口", raw.includes('/api/account/checkin_disabled'));
+// 暂停开关必须在签到状态区、且是文字按钮——顶部图标行紧邻刷新/删除，
+// 放那里（尤其用 ⏸ 图标）容易被误读成「停用整个账号」。
+check("暂停按钮位于签到状态区", /class="acct-checkin">[^<]*<[^>]*>[^<]*([\s\S]{0,400}?)checkin-toggle/.test(cards));
+check("暂停按钮不使用图标", !/icon-op[^>]*>[⏸▶]/.test(cards));
+check("暂停按钮带明确说明", cards.includes("不影响对话与余额刷新"));
 
 // 暂停态：卡片显示「已暂停签到」标签、签到按钮灰掉、给出恢复入口。
 T.setState({
@@ -201,7 +206,7 @@ T.setState({
 T.renderAccounts();
 const pausedCards = document.getElementById("acctList").innerHTML;
 check("暂停账号显示已暂停签到标签", pausedCards.includes("已暂停签到"));
-check("暂停账号给出恢复入口", pausedCards.includes("恢复该账号签到"));
+check("暂停账号给出恢复入口", pausedCards.includes(">恢复签到<"));
 check("暂停账号签到按钮灰掉", /class="icon-op off"[^>]*>✓/.test(pausedCards));
 T.setState(FAKE_STATE);
 
