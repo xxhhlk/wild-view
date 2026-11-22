@@ -438,8 +438,8 @@ function renderTopbar() {
 }
 
 // 渠道显示名与 CSS 短类名（后端 group / 费率 channel 均为 provider.Kind）。
-const CH_LABEL = { workbuddy: "WorkBuddyCN", workbuddyai: "WorkBuddyAI", traework: "TraeWork", traecode: "TraeCode", qoder: "Qoder", qodercn: "QoderCN", qodercom: "QoderCOM", qwenwork: "千问办公", glm: "智谱清言", raccoon: "商汤小浣熊", loomy: "Loomy", monkeycode: "MonkeyCode", minimax: "MiniMax", lobsterai: "LobsterAI", zcode: "ZCode", gemini: "Gemini", codearts: "CodeArts", officeace: "OfficeAce" };
-const CH_CLASS = { workbuddy: "wb", workbuddyai: "wbai", traework: "trae", traecode: "traecode", qoder: "qoder", qodercn: "qodercn", qodercom: "qodercom", qwenwork: "qwenwork", glm: "glm", raccoon: "raccoon", loomy: "loomy", monkeycode: "monkeycode", minimax: "minimax", lobsterai: "lobsterai", zcode: "zcode", gemini: "gemini", codearts: "codearts", officeace: "officeace" };
+const CH_LABEL = { workbuddy: "WorkBuddyCN", workbuddyai: "WorkBuddyAI", traework: "TraeWork", traecode: "TraeCode", qoder: "Qoder", qodercn: "QoderCN", qodercom: "QoderCOM", qwenwork: "千问办公", glm: "智谱清言", raccoon: "商汤小浣熊", loomy: "Loomy", monkeycode: "MonkeyCode", minimax: "MiniMax", lobsterai: "LobsterAI", zcode: "ZCode", gemini: "Gemini", codearts: "CodeArts", officeace: "OfficeAce", modelscope: "ModelScope", modelscopeai: "ModelScopeAI" };
+const CH_CLASS = { workbuddy: "wb", workbuddyai: "wbai", traework: "trae", traecode: "traecode", qoder: "qoder", qodercn: "qodercn", qodercom: "qodercom", qwenwork: "qwenwork", glm: "glm", raccoon: "raccoon", loomy: "loomy", monkeycode: "monkeycode", minimax: "minimax", lobsterai: "lobsterai", zcode: "zcode", gemini: "gemini", codearts: "codearts", officeace: "officeace", modelscope: "modelscope", modelscopeai: "modelscopeai" };
 const chLabel = (k) => CH_LABEL[k] || "WorkBuddy";
 const chClass = (k) => CH_CLASS[k] || "wb";
 // chNameOf 数据驱动的渠道名（用量面板 / 流水 / 图表）：命中显示名则用显示名，
@@ -1272,6 +1272,35 @@ function stopLoginPoll() {
   if (loginPoll) { clearInterval(loginPoll); loginPoll = null; }
 }
 
+// ---------- ModelScope 添加（粘贴 ms- Access Token） ----------
+function openModelScopeImport(international) {
+  $("msErr").textContent = "";
+  $("msTokenInput").value = "";
+  $("msRegion").value = international ? "ai" : "cn";
+  $("msOverlay").classList.remove("hidden");
+  $("msTokenInput").focus();
+}
+
+async function submitModelScopeToken() {
+  const token = ($("msTokenInput").value || "").trim();
+  const region = $("msRegion").value;
+  if (!token) { $("msErr").textContent = "请粘贴 ms- 开头的 Access Token"; return; }
+  const btn = $("btnMSSubmit");
+  btn.disabled = true;
+  $("msErr").textContent = "验证中…";
+  try {
+    await api("/api/login/modelscope_token", { token, region });
+    $("msOverlay").classList.add("hidden");
+    toast("ModelScope 账号已添加");
+    await loadState();
+    refreshFees();
+  } catch (e) {
+    $("msErr").textContent = e.message || "验证失败";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ---------- 智谱清言登录（自动捕获 Cookie，手工粘贴为兜底） ----------
 // 自动路径：wild-view 拉起独立 profile 的浏览器 → 用户正常登录 → CDP 捕获 Cookie。
 // 独立 profile 天然隔离，多账号逐个添加互不干扰（无需手动开无痕）。
@@ -1621,6 +1650,10 @@ function bind() {
   $("btnAddZCode").onclick = () => promptLogin("zcode");
   $("btnAddGemini").onclick = () => promptLogin("gemini");
   $("btnAddCodeArts").onclick = () => promptLogin("codearts");
+  $("btnAddModelScope").onclick = () => openModelScopeImport(false);
+  $("btnAddModelScopeAI").onclick = () => openModelScopeImport(true);
+  $("btnMSSubmit").onclick = submitModelScopeToken;
+  $("btnMSCancel").onclick = () => $("msOverlay").classList.add("hidden");
   $("btnAddGLM").onclick = () => startGLMLogin();
   $("btnGLMSubmit").onclick = submitGLMToken;
   $("btnGLMCancel").onclick = cancelGLMLogin;

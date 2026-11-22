@@ -55,6 +55,12 @@ const (
 	// 登录是服务端中介设备授权流。⚠️ **积分领取依赖阿里云验证码 + headful 浏览器**，
 	// 本仓不实现领取路径（渠道包注释里注明）。
 	ZCode Kind = "zcode"
+	// ModelScope 魔搭国内站（api-inference.modelscope.cn）：凭据是面板粘贴的 `ms-`
+	// Access Token（一枚 token = 一个账号）。额度是「魔粒」，有每日领取。
+	ModelScope Kind = "modelscope"
+	// ModelScopeAI 魔搭国际站（api-inference.modelscope.ai）：同协议、独立服务，
+	// token 不通用，故拆两个 kind 两个账号池、互不兜底。
+	ModelScopeAI Kind = "modelscopeai"
 )
 
 func (k Kind) String() string { return string(k) }
@@ -69,7 +75,7 @@ func BuiltinKinds() map[string]bool {
 	m := map[string]bool{}
 	for _, k := range []Kind{WorkBuddy, WorkBuddyAI, TraeWork, Qoder, QoderCN, QoderCOM,
 		QwenWork, MonkeyCode, Raccoon, Loomy, TraeCode, GLM, OfficeAce, Minimax, LobsterAI,
-		Gemini, CodeArts, ZCode} {
+		Gemini, CodeArts, ZCode, ModelScope, ModelScopeAI} {
 		m[k.String()] = true
 	}
 	for ns := range ModelNamespaces {

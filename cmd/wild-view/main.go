@@ -39,6 +39,7 @@ import (
 	"wild-view/internal/lobsterai"
 	"wild-view/internal/loomy"
 	"wild-view/internal/minimax"
+	"wild-view/internal/modelscope"
 	"wild-view/internal/monkeycode"
 	"wild-view/internal/officeace"
 	"wild-view/internal/platform"
@@ -215,6 +216,15 @@ func main() {
 	if err != nil {
 		fatal("读取 ZCode 账号目录失败：%v", err)
 	}
+	// 魔搭双区：粘贴型渠道，凭据是面板粘贴的 `ms-` token（两区 token 不通用）。
+	msAuths, err := auth.LoadModelscopeDir(cfg.AuthDir)
+	if err != nil {
+		fatal("读取 ModelScope 账号目录失败：%v", err)
+	}
+	msaiAuths, err := auth.LoadModelscopeAIDir(cfg.AuthDir)
+	if err != nil {
+		fatal("读取 ModelScopeAI 账号目录失败：%v", err)
+	}
 	// Gemini（Google Code Assist）：正常多账号渠道，凭据由 loopback OAuth 登录写入 auths/gemini-*.json。
 	gemAuths, err := auth.LoadGeminiDir(cfg.AuthDir)
 	if err != nil {
@@ -294,6 +304,15 @@ func main() {
 	for _, a := range lobAuths {
 		lobPool.Add(a)
 	}
+	// 魔搭双区：两区独立服务、token 不通用 ⇒ 两个池、互不兜底。
+	msPool := pool.New(filepath.Join(stateDir, "state-modelscope.json"))
+	for _, a := range msAuths {
+		msPool.Add(a)
+	}
+	msaiPool := pool.New(filepath.Join(stateDir, "state-modelscopeai.json"))
+	for _, a := range msaiAuths {
+		msaiPool.Add(a)
+	}
 	// ZCode：真多账号池（每个智谱账号一份凭据 + device_mid），不置 SingleAccount。
 	zcdPool := pool.New(filepath.Join(stateDir, "state-zcode.json"))
 	for _, a := range zcdAuths {
@@ -340,6 +359,10 @@ func main() {
 	mimUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	lobUp := lobsterai.New()
 	lobUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
+	msUp := modelscope.New(provider.ModelScope)
+	msUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
+	msaiUp := modelscope.New(provider.ModelScopeAI)
+	msaiUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	zcdUp := zcode.New()
 	zcdUp.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	gemUp := gemini.New()
@@ -454,6 +477,11 @@ func main() {
 	// 签到结果按结构化状态上报），也需要 token 保活（续期后必须落盘，不变量 20）。
 	caSch := scheduler.New(scheduler.Config{Pool: caPool, Upstream: caUp, Name: "codearts",
 		CheckinMinutes: checkinMinutes, FollowGlobalCheckin: true, KeepaliveHours: keepaliveHours, Ledger: lg})
+	// 魔搭：每日魔粒领取是签到语义，时刻跟随全局；无 refresh 端点，保活为空。
+	msSch := scheduler.New(scheduler.Config{Pool: msPool, Upstream: msUp, Name: "modelscope",
+		CheckinMinutes: checkinMinutes, FollowGlobalCheckin: true, KeepaliveHours: []int{}, Ledger: lg})
+	msaiSch := scheduler.New(scheduler.Config{Pool: msaiPool, Upstream: msaiUp, Name: "modelscopeai",
+		CheckinMinutes: checkinMinutes, FollowGlobalCheckin: true, KeepaliveHours: []int{}, Ledger: lg})
 	// 智谱清言：签到与对话联动（当日需先对话才能领打卡进度），故保活与签到
 	// 合成一个流程（glm.Client.Keepalive 先发最小对话再签到）。
 	// 用 DailyCheckin 通道驱动：CheckinMinutes 用全局签到时间，
@@ -497,6 +525,9 @@ func main() {
 		provider.ZCode:      {Kind: provider.ZCode, Pool: zcdPool, Upstream: zcdUp, Scheduler: zcdSch, StaticModels: zcode.StaticModels()},
 		provider.Gemini:     {Kind: provider.Gemini, Pool: gemPool, Upstream: gemUp, Scheduler: gemSch, StaticModels: gemini.StaticModels()},
 		provider.CodeArts:   {Kind: provider.CodeArts, Pool: caPool, Upstream: caUp, Scheduler: caSch, StaticModels: codearts.StaticModels()},
+		provider.ModelScope: {Kind: provider.ModelScope, Pool: msPool, Upstream: msUp, Scheduler: msSch, StaticModels: modelscope.StaticModels()},
+		provider.ModelScopeAI: {Kind: provider.ModelScopeAI, Pool: msaiPool, Upstream: msaiUp, Scheduler: msaiSch,
+			StaticModels: modelscope.StaticModels()},
 	}
 
 	appInst, err := app.New(app.Options{
@@ -585,6 +616,9 @@ func main() {
 	go gemSch.Run(sctx)
 	// CodeArts 的 Run 不可漏（R34）：本渠道有签到与保活两条定时任务。
 	go caSch.Run(sctx)
+	// 魔搭双区的 Run 不可漏：每日魔粒领取是定时签到任务。
+	go msSch.Run(sctx)
+	go msaiSch.Run(sctx)
 
 	// 积分自动刷新覆盖全部渠道：
 	// - workbuddyai / qoder 无签到活动，不自动刷就会一直显示旧值或 0；

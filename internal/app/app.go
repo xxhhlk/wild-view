@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,6 +38,7 @@ import (
 	logintrae "wild-view/internal/login_trae"
 	"wild-view/internal/login_wbai"
 	loginzcode "wild-view/internal/login_zcode"
+	"wild-view/internal/modelscope"
 	"wild-view/internal/officeace"
 	"wild-view/internal/platform"
 	"wild-view/internal/pool"
@@ -315,7 +317,7 @@ func (a *App) runtimesSnapshot() []*Runtime {
 
 func (a *App) firstRuntime() *Runtime {
 	// 顺序即展示优先级：新渠道追加在末尾。
-	for _, k := range []provider.Kind{provider.WorkBuddy, provider.WorkBuddyAI, provider.TraeWork, provider.Qoder, provider.QoderCN, provider.QoderCOM, provider.QwenWork, provider.GLM, provider.Raccoon, provider.Loomy, provider.MonkeyCode, provider.Minimax, provider.LobsterAI, provider.ZCode, provider.Gemini, provider.CodeArts} {
+	for _, k := range []provider.Kind{provider.WorkBuddy, provider.WorkBuddyAI, provider.TraeWork, provider.Qoder, provider.QoderCN, provider.QoderCOM, provider.QwenWork, provider.GLM, provider.Raccoon, provider.Loomy, provider.MonkeyCode, provider.Minimax, provider.LobsterAI, provider.ZCode, provider.Gemini, provider.CodeArts, provider.ModelScope, provider.ModelScopeAI} {
 		if rt := a.runtime(k); rt != nil {
 			return rt
 		}
@@ -379,13 +381,15 @@ func (a *App) allStatuses() []pool.Status {
 var channelOrder = map[provider.Kind]int{
 	provider.WorkBuddy: 0, provider.WorkBuddyAI: 1,
 	provider.QoderCN: 2, provider.QoderCOM: 3, provider.TraeWork: 4, provider.QwenWork: 5,
-	provider.GLM:       6,
-	provider.OfficeAce: 7,
-	provider.Minimax:   9,
-	provider.LobsterAI: 10,
-	provider.ZCode:     11,
-	provider.Gemini:    12,
-	provider.CodeArts:  13,
+	provider.GLM:          6,
+	provider.OfficeAce:    7,
+	provider.Minimax:      9,
+	provider.LobsterAI:    10,
+	provider.ZCode:        11,
+	provider.Gemini:       12,
+	provider.CodeArts:     13,
+	provider.ModelScope:   14,
+	provider.ModelScopeAI: 15,
 }
 
 // feeChannelOrder 「模型列表和费率」面板的渠道分组顺序。
@@ -403,6 +407,8 @@ var feeChannelOrder = []provider.Kind{
 	provider.Gemini,
 	provider.CodeArts,
 	provider.OfficeAce,
+	provider.ModelScope,
+	provider.ModelScopeAI,
 }
 
 // channelRank 渠道排序键：未知渠道排最后。
@@ -1582,6 +1588,49 @@ func (a *App) SubmitGLMToken(refreshToken string) (string, error) {
 	return r.UID, nil
 }
 
+// SubmitModelscopeToken 提交用户粘贴的 `ms-` Access Token：校验 → 落盘 → 重载账号池。
+// region="ai" 走国际站，其余走国内站；两区 token 不通用，故分别落 modelscope*/modelscopeai*。
+func (a *App) SubmitModelscopeToken(token, region string) (string, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", errors.New("请粘贴 ModelScope 的 ms- Access Token")
+	}
+	kind, prefix := provider.ModelScope, "modelscope"
+	if strings.EqualFold(region, "ai") {
+		kind, prefix = provider.ModelScopeAI, "modelscopeai"
+	}
+	// 先用一次额度查询验证 token 有效：无效凭据直接拒绝，不落盘。
+	cl := modelscope.New(kind)
+	cl.HTTP.Timeout = 30 * time.Second
+	if _, err := cl.UserResource(&auth.Auth{Kind: string(kind), AccessToken: token}); err != nil {
+		return "", fmt.Errorf("token 校验失败：%v", err)
+	}
+	sum := sha256.Sum256([]byte(token))
+	uid := fmt.Sprintf("%x", sum[:6])
+	tail := token
+	if len(tail) > 4 {
+		tail = tail[len(tail)-4:]
+	}
+	label := "ModelScope"
+	if kind == provider.ModelScopeAI {
+		label = "ModelScopeAI"
+	}
+	au := &auth.Auth{
+		Kind:        string(kind),
+		AccessToken: token,
+		UID:         uid,
+		Nickname:    fmt.Sprintf("%s…%s", label, tail),
+		FilePath:    filepath.Join(a.cfg.AuthDir, prefix+"-"+uid+".json"),
+	}
+	if err := au.SaveAtomic(); err != nil {
+		return "", err
+	}
+	log.Printf("%s 账号已添加 uid=%s", prefix, uid)
+	a.reloadAccounts()
+	a.afterAccountAdded(kind)
+	return uid, nil
+}
+
 // StartGLMAutoLogin 发起智谱清言自动登录：拉起独立 profile 的浏览器，
 // 用户在真实浏览器里登录，后台经 CDP 自动捕获 Cookie。
 //
@@ -1865,6 +1914,22 @@ func (a *App) reloadAccounts() {
 			log.Printf("reload lobsterai accounts: %v", err)
 		} else {
 			rt.Pool.SyncToDir(auths)
+		}
+	}
+	for _, ms := range []struct {
+		kind provider.Kind
+		load func(string) ([]*auth.Auth, error)
+	}{
+		{provider.ModelScope, auth.LoadModelscopeDir},
+		{provider.ModelScopeAI, auth.LoadModelscopeAIDir},
+	} {
+		if rt := a.runtime(ms.kind); rt != nil && rt.Pool != nil {
+			auths, err := ms.load(a.cfg.AuthDir)
+			if err != nil {
+				log.Printf("reload %s accounts: %v", ms.kind, err)
+			} else {
+				rt.Pool.SyncToDir(auths)
+			}
 		}
 	}
 	if rt := a.runtime(provider.ZCode); rt != nil && rt.Pool != nil {
@@ -3167,6 +3232,23 @@ func (a *App) HandleAPI(mux *http.ServeMux) {
 			return
 		}
 		uid, err := a.SubmitGLMToken(req.RefreshToken)
+		if err != nil {
+			apiError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "uid": uid})
+	})
+	// 魔搭双区：粘贴 ms- token 添加账号（两区 token 不通用，region 决定落哪个池）。
+	mux.HandleFunc("POST /api/login/modelscope_token", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Token  string `json:"token"`
+			Region string `json:"region"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			apiError(w, http.StatusBadRequest, "请求体解析失败")
+			return
+		}
+		uid, err := a.SubmitModelscopeToken(req.Token, req.Region)
 		if err != nil {
 			apiError(w, http.StatusBadRequest, err.Error())
 			return

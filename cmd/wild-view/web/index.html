@@ -65,6 +65,8 @@
           <button class="btn primary alt zcode" id="btnAddZCode" style="grid-column:4;grid-row:4" title="ZCode（智谱）：设备授权登录；积分领取依赖网页验证码，本工具不自动领取">＋ ZCode</button>
           <button class="btn primary alt gemini" id="btnAddGemini" style="grid-column:1;grid-row:5" title="Gemini（Google Code Assist）：本机回调授权登录，支持多账号">＋ Gemini</button>
           <button class="btn primary alt codearts" id="btnAddCodeArts" style="grid-column:2;grid-row:5" title="CodeArts（华为云）：PKCE 授权登录，支持多账号；免费额度按 UTC+8 自然日重置">＋ CodeArts</button>
+          <button class="btn primary alt modelscope" id="btnAddModelScope" style="grid-column:3;grid-row:5" title="ModelScope 魔搭国内站：粘贴 ms- Access Token，额度为魔粒，有每日领取">＋ ModelScope</button>
+          <button class="btn primary alt modelscopeai" id="btnAddModelScopeAI" style="grid-column:4;grid-row:5" title="ModelScope 国际站：与国内站 token 不通用，需独立 token">＋ ModelScopeAI</button>
         </div>
       </div>
     </div>
@@ -230,6 +232,37 @@
     </div>
     <div class="modal-actions">
       <button class="btn small" id="btnGLMCancel">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ModelScope 添加（粘贴 ms- Access Token） -->
+<div class="overlay hidden" id="msOverlay">
+  <div class="modal">
+    <div class="modal-title">添加 ModelScope 账号</div>
+    <div class="modal-body settings-body">
+      <div class="cfg-section">
+        <div class="cfg-heading">获取 Access Token</div>
+        <ol class="glm-steps">
+          <li>打开 <a href="https://modelscope.cn/my/myaccesstoken" target="_blank" rel="noopener noreferrer">魔搭 · 访问令牌</a> 并登录。</li>
+          <li>复制 <code>ms-</code> 开头的 Access Token，粘贴到下方。</li>
+          <li>国内站与国际站的 token <b>不通用</b>，请按账号所属区域选择。</li>
+        </ol>
+        <select id="msRegion" class="input grow">
+          <option value="cn">国内站（modelscope.cn）</option>
+          <option value="ai">国际站（modelscope.ai）</option>
+        </select>
+        <input id="msTokenInput" class="input grow" spellcheck="false"
+               placeholder="粘贴 ms- 开头的 Access Token" autocomplete="off">
+        <div class="hint" style="margin-top:6px">
+          <button class="btn small primary" id="btnMSSubmit">验证并添加</button>
+        </div>
+      </div>
+      <div class="hint" id="msErr" style="color:var(--danger)"></div>
+      <div class="hint">凭据只保存在本机 <code>auths/</code> 目录，不会外传。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn small" id="btnMSCancel">关闭</button>
     </div>
   </div>
 </div>

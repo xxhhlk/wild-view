@@ -476,6 +476,18 @@ func LoadLoomyDir(dir string) ([]*Auth, error) {
 	return loadPrefixed(dir, "loomy")
 }
 
+// LoadModelscopeDir 扫描魔搭国内站凭证（modelscope-*.json）。
+// 粘贴型渠道：凭据是面板手工粘贴的 `ms-` Access Token（一枚 token = 一个账号）。
+// glob 边界：`modelscope-*.json` 与 `modelscopeai-*.json` 互不吞噬（后者前缀后紧接 a）。
+func LoadModelscopeDir(dir string) ([]*Auth, error) {
+	return loadPrefixed(dir, "modelscope")
+}
+
+// LoadModelscopeAIDir 扫描魔搭国际站凭证（modelscopeai-*.json）。
+func LoadModelscopeAIDir(dir string) ([]*Auth, error) {
+	return loadPrefixed(dir, "modelscopeai")
+}
+
 // LoadOfficeAceDir 扫描华为云果办 OfficeAce 渠道凭证（officeace-*.json）。
 // 属「导入型」渠道：凭据由面板从本机 OfficeAce 客户端文件发现后生成
 // （见 internal/officeace 的发现逻辑），或自助 OAuth 登录生成。
