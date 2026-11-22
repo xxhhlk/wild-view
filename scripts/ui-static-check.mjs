@@ -73,6 +73,11 @@ function mkNode(id) {
       add: (c) => cls.add(c),
       remove: (c) => cls.delete(c),
       contains: (c) => cls.has(c),
+      toggle: (c, force) => {
+        const on = force === undefined ? !cls.has(c) : Boolean(force);
+        if (on) cls.add(c); else cls.delete(c);
+        return on;
+      },
       _set: cls,
     },
     onmouseenter: null,
@@ -89,7 +94,7 @@ const window = { addEventListener: () => {}, location: { search: "" } };
 // 源码改写：注入 state + 导出函数
 const patched =
   raw.replace(/let state = null;/, "let state = " + JSON.stringify(FAKE_STATE) + ";") +
-  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, refreshFees, showOpenLink, hideOpenLink, toHalfWidthAscii, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, renderCreditDetail, setDetail: (uid, d) => { detailState = { uid, page: 0 }; detailCache[uid] = d; }, setState: (s) => { state = s; } };";
+  "\n; globalThis.__T = { renderAccounts, renderSummary, renderFees, refreshFees, showOpenLink, hideOpenLink, toHalfWidthAscii, addTime, commitTime, closeTimeEditor, delTime, saveTimes, loadState, renderCreditDetail, setAcctView, acctView: () => acctView, setDetail: (uid, d) => { detailState = { uid, page: 0 }; detailCache[uid] = d; }, setState: (s) => { state = s; } };";
 
 // fetch 记录桩：checkin_times 变更要能断言「没点确定就不发请求」。
 // POST /api/config/checkin_times 会「落库」，后续 /api/state 必须回新值——
@@ -208,6 +213,21 @@ const pausedCards = document.getElementById("acctList").innerHTML;
 check("暂停账号显示已暂停签到标签", pausedCards.includes("已暂停签到"));
 check("暂停账号给出恢复入口", pausedCards.includes(">恢复签到<"));
 check("暂停账号签到按钮灰掉", /class="icon-op off"[^>]*>✓/.test(pausedCards));
+T.setState(FAKE_STATE);
+
+// ---- 场景 1.5：列表视图（卡片⇄列表互斥，单表五列） ----
+T.setAcctView("list");
+const listHtml = document.getElementById("acctList").innerHTML;
+check("列表模式生成单表", listHtml.includes('<table class="acct-table"'));
+check("五列表头齐全", ["平台", "账号", "积分", "状态", "操作"].every((h) => listHtml.includes(`>${h}<`)));
+check("按渠道分组 tbody", (listHtml.match(/<tbody class="acct-group"/g) || []).length >= 1);
+check("列表行保留签到/刷新/删除入口", listHtml.includes("checkin(") && listHtml.includes("refreshOne(") && listHtml.includes("removeAcct("));
+check("列表行保留暂停签到入口", listHtml.includes("toggleCheckinPaused("));
+check("列表模式容器带 list-mode", document.getElementById("acctList").classList.contains("list-mode"));
+check("列表模式不渲染卡片", !listHtml.includes('class="acct-card'));
+T.setAcctView("card");
+check("切回卡片模式无表格", !document.getElementById("acctList").innerHTML.includes("acct-table"));
+check("切回卡片模式容器去掉 list-mode", !document.getElementById("acctList").classList.contains("list-mode"));
 T.setState(FAKE_STATE);
 
 // ---- 场景 2：渠道汇总条 ----

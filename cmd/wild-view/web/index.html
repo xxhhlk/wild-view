@@ -36,18 +36,7 @@
     <div class="mtab-body" id="mtabAccounts">
     <div class="panel-head">
       <div class="panel-actions-wrap">
-        <!-- 左组：刷新积分/全部签到，整体靠左 -->
-        <div class="pa-group pa-left">
-          <button class="btn primary" id="btnRefreshAll">刷新积分</button>
-          <button class="btn" id="btnCheckinAll">全部签到</button>
-        </div>
-        <!-- 中间弹性空白由 flex:1 撑开 -->
-        <div class="pa-spacer"></div>
-        <!-- 右组：渠道添加四列 grid，整体靠右；第4列在行2留白（体验渠道不占主位） -->
-        <!-- 布局：行1 = WorkBuddyCN | QoderCN | TraeWork | 智谱清言(体验)；行2 = WorkBuddyAI | QoderCOM | 千问办公 | 留空
-             行3 = 商汤小浣熊 | Loomy | MonkeyCode；行4 = OfficeAce | MiniMax | LobsterAI | ZCode
-             行5 = Gemini | CodeArts -->
-        <!-- 旧 Qoder 渠道已下线（代码保留，仅删界面入口） -->
+        <!-- 渠道添加 grid：占满整行（账号页级动作已移到下方 fn-bar） -->
         <div class="pa-group pa-right">
           <button class="btn primary" id="btnAddWB" style="grid-column:1;grid-row:1">＋ WorkBuddyCN</button>
           <button class="btn primary alt qodercn" id="btnAddQoderCN" style="grid-column:2;grid-row:1">＋ QoderCN</button>
@@ -70,7 +59,19 @@
         </div>
       </div>
     </div>
+    <!-- 功能按钮条（账号页级动作集中于此；顶部只留渠道添加按钮）：
+         刷新积分 / 全部签到沿用原标识与绑定，视图切换（卡片⇄列表）新增于此。 -->
+    <div class="fn-bar" id="acctFnBar">
+      <button class="btn primary" id="btnRefreshAll">刷新积分</button>
+      <button class="btn" id="btnCheckinAll">全部签到</button>
+      <div class="fn-spacer"></div>
+      <div class="seg" id="acctViewSeg" title="切换账号视图：卡片（浏览，默认）/ 列表（按渠道分组，一行一个账号）">
+        <button class="seg-btn active" data-view="card">卡片</button>
+        <button class="seg-btn" data-view="list">列表</button>
+      </div>
+    </div>
     <div id="creditSummary" class="credit-summary hidden" title="各渠道积分汇总（与账号卡片同源）"></div>
+    <!-- 账号区：卡片网格 / 列表两视图在同一容器内互斥渲染（容器切 .list-mode） -->
     <div id="acctList" class="acct-grid"></div>
     <div id="acctEmpty" class="empty hidden">还没有账号，点击上方按钮添加</div>
     </div>

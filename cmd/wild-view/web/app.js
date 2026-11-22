@@ -581,15 +581,51 @@ function renderSummary() {
     + `</span>`;
   el.innerHTML = html;
 }
+// acctView 账号页视图：card（两列卡片，默认）/ list（按渠道分组的单表）。
+// 偏好只存 localStorage（与其它本地开关同款「失败静默」），不做服务端持久化；
+// 读到非 "list" 一律回退卡片。
+const ACCT_VIEW_KEY = "acct-view";
+let acctView = "card";
+try { if (localStorage.getItem(ACCT_VIEW_KEY) === "list") acctView = "list"; } catch (e) { /* 存储不可用 */ }
+
+function persistAcctView() {
+  try { localStorage.setItem(ACCT_VIEW_KEY, acctView); } catch (e) { /* 忽略 */ }
+}
+
+// syncAcctViewSeg 同步视图切换的按钮高亮（唯一真相 = acctView）。
+function syncAcctViewSeg() {
+  const seg = $("acctViewSeg");
+  if (!seg) return;
+  seg.querySelectorAll(".seg-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === acctView);
+  });
+}
+
+// setAcctView 切换视图：落盘 + 高亮 + 重渲染账号区（汇总条与费率与视图无关，不重算）。
+function setAcctView(v) {
+  acctView = v === "list" ? "list" : "card";
+  persistAcctView();
+  syncAcctViewSeg();
+  renderAccounts();
+}
+
 function renderAccounts() {
   const grid = $("acctList");
   const empty = $("acctEmpty");
   if (!state.accounts.length) {
     grid.innerHTML = "";
+    grid.classList.remove("list-mode");
     empty.classList.remove("hidden");
     return;
   }
   empty.classList.add("hidden");
+
+  const listMode = acctView === "list";
+  grid.classList.toggle("list-mode", listMode);
+  if (listMode) {
+    grid.innerHTML = acctGroupsHtml();
+    return;
+  }
 
   grid.innerHTML = state.accounts.map((a) => {
     const group = chClass(a.group);
@@ -656,6 +692,68 @@ function renderAccounts() {
       </div>
     </div>`;
   }).join("");
+}
+
+// ---------- 列表视图（按渠道分组的单表；与卡片互斥） ----------
+// 五列：平台 / 账号 / 积分 / 状态 / 操作。状态与操作刻意与卡片同源（同函数、同标识），
+// 不在列表里另立一套判据。平台列只有徽标，渠道名不重复。
+function acctRowHtml(a) {
+  const group = chClass(a.group);
+  const groupName = chLabel(a.group);
+  const noCheckin = noExplicitCheckin(a.group);
+  const noCheckinTitle = a.group === "workbuddyai"
+    ? "无需手动签到：定时自动对话保活并领取日活奖励"
+    : `${groupName} 不支持手动签到`;
+  const checkinTag = noCheckin
+    ? `<span class="tag neutral" title="${esc(noCheckinTitle)}">${noCheckinText(a.group)}</span>`
+    : a.checkin_disabled
+      ? '<span class="tag neutral" title="该账号已暂停签到，恢复后照常定时签到">已暂停签到</span>'
+      : a.last_checkin_at
+        ? `<span class="tag ${a.last_checkin_ok ? "ok" : "bad"}">${a.last_checkin_ok ? "签到成功" : "签到失败"}</span>`
+        : '<span class="tag neutral">未签到</span>';
+  const coolingTag = a.cooling
+    ? `<span class="tag warn" title="${esc(a.reason || "冷却中")}">冷却至 ${esc(a.until || "-")}</span>`
+    : "";
+  const disabledTag = a.disabled ? '<span class="tag neutral">已停用</span>' : "";
+
+  const checkinBtn = noCheckin || a.checkin_disabled
+    ? `<span class="icon-op off" title="${a.checkin_disabled ? "已暂停签到" : esc(noCheckinTitle)}" onclick="return false">✓</span>`
+    : `<span class="icon-op" title="签到" onclick="checkin('${a.uid}')">✓</span>`;
+  const pauseBtn = noCheckin ? "" : a.checkin_disabled
+    ? `<button class="checkin-toggle on" title="恢复该账号的定时与手动签到" onclick="toggleCheckinPaused('${a.uid}', false)">恢复签到</button>`
+    : `<button class="checkin-toggle" title="暂停该账号的定时与手动签到（不影响对话与余额刷新）" onclick="toggleCheckinPaused('${a.uid}', true)">暂停签到</button>`;
+  const noCredits = hasNoCredits(a.group);
+  const ops = `${checkinBtn}${pauseBtn}
+    ${noCredits ? "" : `<span class="icon-op" title="刷新积分" onclick="refreshOne('${a.uid}')">↻</span>`}
+    <span class="icon-op danger" title="删除账号" onclick="removeAcct('${a.uid}')">✕</span>`;
+  const name = esc(a.nickname || shortUid(a.uid)).replace(/'/g, "&#39;");
+  const cls = "acct-row" + (a.disabled ? " disabled-row" : "") + (a.cooling ? " cooling-row" : "");
+  return `
+    <tr class="${cls}" data-group="${esc(a.group || "workbuddy")}">
+      <td class="cell-platform"><span class="badge ${group}">${groupName}</span>${chPrefixChip(a.group)}</td>
+      <td class="cell-acct"><span class="acct-name editable" title="点击修改显示名" onclick="openRename('${a.uid}','${name}')">${esc(a.nickname || shortUid(a.uid))}</span><div class="cell-uid">UID: ${esc(shortUid(a.uid))}</div></td>
+      <td class="num cell-credits acct-credits" data-uid="${a.uid}"${noCredits ? "" : ` onclick="showCreditDetail(event,'${a.uid}')" title="点击查看积分明细" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showCreditDetail(event,'${a.uid}')}"`}>${creditsText(a)}</td>
+      <td class="cell-tags">${coolingTag}${disabledTag}${checkinTag}</td>
+      <td class="cell-ops">${ops}</td>
+    </tr>`;
+}
+
+// acctGroupsHtml 列表整表：单 <table>、唯一表头，表体按渠道分段（每段一个 tbody）。
+// 分组顺序沿用 state.accounts 的到达顺序（后端已按渠道序下发），组内保持原序。
+function acctGroupsHtml() {
+  const order = [];
+  const rows = new Map();
+  for (const a of state.accounts) {
+    const g = a.group || "workbuddy";
+    if (!rows.has(g)) { rows.set(g, []); order.push(g); }
+    rows.get(g).push(a);
+  }
+  const body = order.map((g) =>
+    `<tbody class="acct-group" data-group="${esc(g)}">${rows.get(g).map(acctRowHtml).join("")}</tbody>`).join("");
+  return `<div class="tbl-scroll"><table class="acct-table" id="acctTable">`
+    + `<thead><tr><th class="col-platform">平台</th><th class="col-acct">账号</th>`
+    + `<th class="num col-credits">积分</th><th class="col-status">状态</th><th class="col-ops">操作</th></tr></thead>`
+    + body + `</table></div>`;
 }
 
 function renderTimes() {
@@ -1658,6 +1756,10 @@ function bind() {
   $("btnGLMSubmit").onclick = submitGLMToken;
   $("btnGLMCancel").onclick = cancelGLMLogin;
   $("btnGLMToggleManual").onclick = () => $("glmManual").classList.toggle("hidden");
+  $("acctViewSeg").querySelectorAll(".seg-btn").forEach((b) => {
+    b.onclick = () => setAcctView(b.dataset.view);
+  });
+  syncAcctViewSeg();
   $("btnCheckinAll").onclick = checkinAll;
   $("btnRefreshAll").onclick = refreshAll;
   $("btnAddTime").onclick = addTime;

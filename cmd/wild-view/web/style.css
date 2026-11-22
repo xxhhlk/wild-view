@@ -66,15 +66,20 @@ body {
 /* 账号管理按钮区：外层 wrap 分三段 —— 左组(刷新/签到) + 弹性空白 + 右组(渠道三列 grid)。
    左组整体靠左、右组整体靠右，中间空白自动伸缩；左组窄时 wrap 换行不溢出。 */
 .panel-actions-wrap { display: flex; align-items: center; flex: 1; min-width: 0; }
-.pa-spacer { flex: 1; }
-.pa-left { display: flex; flex-direction: column; gap: 8px; }
-.pa-left .btn { white-space: nowrap; align-self: flex-start; }
+/* 渠道添加网格占满整行：账号页级动作（刷新/签到/视图）已移入 .fn-bar，
+   早期的 .pa-spacer 弹性空档因此失去用途，已删除。 */
 .pa-right {
   display: grid;
-  grid-template-columns: repeat(6, auto);
+  flex: 1;
+  min-width: 0;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px 10px;
 }
 .pa-right .btn { justify-self: stretch; white-space: nowrap; }
+
+/* 功能按钮条：账号页级动作（刷新积分 / 全部签到 / 视图切换），位于汇总条上方 */
+.fn-bar { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; }
+.fn-spacer { flex: 1; }
 /* 摆位与列配对由 DOM 顺序（行主序）决定：同列上下 = 同渠道的国内/国际版
    （WorkBuddyCN/WorkBuddyAI、QoderCN/QoderCOM），Cline 占第一行末位、
    第二行第 6 列留空（见 index.html 内注释与 ui-static-check 的顺序断言）。 */
@@ -186,6 +191,31 @@ body {
 .checkin-toggle:hover { color: var(--primary); border-color: var(--primary); background: #eff6ff; }
 .checkin-toggle.on { color: var(--primary); border-color: #bfdbfe; background: #eff6ff; }
 .checkin-toggle.on:hover { color: var(--danger); border-color: var(--danger); background: #fef2f2; }
+
+/* ---------- 列表视图（按渠道分组的单表；与卡片互斥） ---------- */
+.acct-grid.list-mode { display: block; }
+.tbl-scroll { overflow-x: auto; }
+.acct-table {
+  width: 100%; border-collapse: collapse; font-size: 12px; table-layout: auto;
+}
+.acct-table thead th {
+  position: sticky; top: 0; background: var(--card); z-index: 1;
+  text-align: left; font-weight: 600; font-size: 11px; color: var(--muted);
+  padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.acct-table thead th.num { text-align: right; }
+.acct-table tbody.acct-group + tbody.acct-group tr:first-child td { border-top: 1px solid var(--border); }
+.acct-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.acct-table td.cell-acct { white-space: normal; }
+.acct-table td.cell-uid { font-size: 10px; color: var(--muted); }
+.acct-table .cell-uid { font-size: 10px; color: var(--muted); }
+.acct-table td.num { text-align: right; white-space: nowrap; }
+.acct-table td.cell-tags { white-space: nowrap; }
+.acct-table td.cell-tags .tag { margin-right: 4px; }
+.acct-table td.cell-ops { white-space: nowrap; }
+.acct-table tr.acct-row.disabled-row { opacity: .55; }
+.acct-table tr.acct-row.cooling-row td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.acct-table .cell-credits { cursor: pointer; }
 .acct-card .acct-ops { display: flex; gap: 4px; justify-content: flex-end; }
 
 .badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; color: #fff; white-space: nowrap; }
@@ -1105,8 +1135,6 @@ body {
   .top-icons { order: 2; margin-left: auto; }
   .top-info { order: 3; flex: none; width: 100%; }
   .panel-actions-wrap { flex-direction: column; align-items: stretch; gap: 8px; }
-  .pa-spacer { display: none; }
-  .pa-left { flex-direction: row; flex-wrap: wrap; }
   .pa-right { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); width: 100%; }
   .pa-right .btn { justify-self: stretch; padding: 8px 10px; }
 }
