@@ -67,15 +67,44 @@ var staticModelKeys = map[string]string{
 	"qwen3.8-max":         "qwen3.8-max-preview",
 	"qwen3.8-max-preview": "qwen3.8-max-preview",
 	"qmodel_latest":       "qwen3.8-max-preview",
+	"qwen4-max":           "qwen4-max",
+	"qwen-4-max":          "qwen4-max",
+	"qwen3.8-flash":       "qwen3.8-flash",
+	"ling-3.1-flash":      "ling-3.1-flash",
+	"deepseek-flash":      "deepseek-flash",
+	"deepseek-v4.1-flash": "deepseek-flash",
+	"deepseek-v4-flash":   "deepseek-flash",
+	"deepseek-chat":       "deepseek-flash",
+	"deepseek-v4-pro":     "deepseek-v4-pro",
+	"deepseek-reasoner":   "deepseek-v4-pro",
+	"glm-5.3":             "glm-5.3",
+	"glm-5.3-flash":       "glm-5.3-flash",
+	"kimi-k3.1-pro":       "kimi-k3.1-pro",
+	"kimi-k3.1":           "kimi-k3.1-pro",
+	"kimi":                "kimi-k3.1-pro",
+	"minimax-m3.1-flash":  "minimax-m3.1-flash",
+	"minimax":             "minimax-m3.1-flash",
+	"step-5-preview":      "step-5-preview",
+	"step-5":              "step-5-preview",
 }
 
 // staticModels 静态兜底模型表（动态模型接口不可用时的 fallback）。
 // priceFactor 为相对基准倍率（pro=1.0）；SupportsTools 实测支持（tool_calls 流式），
 // SupportsImages 按 /api/chat-modes 声明（flash/qwen3.8-max 为 is_vl=true）。
 var staticModels = []provider.ModelInfo{
-	{ID: "pro", Name: "高级", ContextWindow: 180_000, SupportsTools: true},
-	{ID: "flash", Name: "标准", ContextWindow: 180_000, SupportsImages: true, SupportsTools: true},
-	{ID: "qwen3.8-max-preview", Name: "Qwen3.8-Max", ContextWindow: 180_000, SupportsImages: true, SupportsTools: true},
+	{ID: "pro", Name: "高级", ContextWindow: 180_000, SupportsReasoning: true, SupportsTools: true},
+	{ID: "flash", Name: "标准", ContextWindow: 180_000, SupportsImages: true, SupportsReasoning: true, SupportsTools: true},
+	{ID: "qwen4-max", Name: "Qwen4-Max", ContextWindow: 180_000, SupportsImages: true, SupportsReasoning: true, SupportsTools: true},
+	{ID: "qwen3.8-max-preview", Name: "Qwen3.8-Max", ContextWindow: 180_000, SupportsImages: true, SupportsReasoning: true, SupportsTools: true},
+	{ID: "qwen3.8-flash", Name: "Qwen3.8-Flash", ContextWindow: 180_000, SupportsImages: true, SupportsReasoning: true, SupportsTools: true},
+	{ID: "ling-3.1-flash", Name: "Ling-3.1-Flash", ContextWindow: 180_000, SupportsReasoning: true, SupportsTools: true},
+	{ID: "deepseek-flash", Name: "DeepSeek-V4.1-Flash", ContextWindow: 180_000, SupportsImages: true, SupportsReasoning: true, SupportsTools: true},
+	{ID: "deepseek-v4-pro", Name: "Deepseek-V4-Pro", ContextWindow: 180_000, SupportsReasoning: true, SupportsTools: true},
+	{ID: "glm-5.3", Name: "GLM-5.3", ContextWindow: 180_000, SupportsReasoning: true, SupportsTools: true},
+	{ID: "glm-5.3-flash", Name: "GLM-5.3-Flash", ContextWindow: 180_000, SupportsReasoning: true, SupportsTools: true},
+	{ID: "kimi-k3.1-pro", Name: "Kimi-K3.1-Pro", ContextWindow: 180_000, SupportsImages: true, SupportsReasoning: true, SupportsTools: true},
+	{ID: "minimax-m3.1-flash", Name: "MiniMax-M3.1-Flash", ContextWindow: 180_000, SupportsImages: true, SupportsReasoning: true, SupportsTools: true},
+	{ID: "step-5-preview", Name: "Step-5-Preview", ContextWindow: 180_000, SupportsImages: true, SupportsReasoning: true, SupportsTools: true},
 }
 
 // StaticModels 返回静态兜底模型表副本（供 server.Runtime.StaticModels）。
@@ -95,12 +124,22 @@ func ModelKey(clientName string) string {
 // 动态费率优先；此处仅静态兜底。
 func priceFactorOf(key string) float64 {
 	switch key {
-	case "flash":
+	case "flash", "qwen3.8-flash", "ling-3.1-flash", "deepseek-flash":
 		return 0.1
 	case "pro":
 		return 1.0
 	case "qwen3.8-max-preview":
 		return 1.8
+	case "deepseek-v4-pro", "glm-5.3-flash", "minimax-m3.1-flash":
+		return 0.2
+	case "step-5-preview":
+		return 0.7
+	case "glm-5.3":
+		return 1.2
+	case "qwen4-max":
+		return 1.6
+	case "kimi-k3.1-pro":
+		return 2.4
 	}
 	return 0
 }

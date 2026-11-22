@@ -33,7 +33,12 @@ var (
 	// reQueueCode 精确排队码：TM.00001041（排队）/ 81111（APIG 限流）。
 	reQueueCode = regexp.MustCompile(`TM\.00001041|81111`)
 	// reQuotaCode 精确额度码：4291（InferHub.4291.200）+ insufficient quota 措辞。
+	// 语义 = benefit 免费额度耗尽（按 UTC+8 自然日重置）。
 	reQuotaCode = regexp.MustCompile(`(?i)4291|insufficient quota|quota[ _-]?exhausted`)
+	// reCreditExhausted 积分账户耗尽：TM.00001050（HTTP 400 +「您的积分已耗尽」）+ 中文兜底。
+	// 与 reQuotaCode 分开只为让恢复说明按池子分支：积分靠领取活动入账，没有自动重置时刻。
+	// 码后必须跟非数字（R75 纪律）：TM.000010500 之类不得被前缀命中。
+	reCreditExhausted = regexp.MustCompile(`(?i)TM\.00001050(?:[^0-9]|$)|积分已耗尽`)
 	// reStandalone429 独立数字 429：前后都不得是数字（`4291` 不得命中）。
 	reStandalone429 = regexp.MustCompile(`(?:^|[^0-9])429(?:[^0-9]|$)`)
 	// reRateWord 泛化限流词表。
@@ -65,6 +70,11 @@ func Classify(status int, body string) provider.ErrKind {
 		return provider.ErrSoftRate
 	case reQuotaCode.MatchString(low):
 		// 免费额度用尽：**不可重试**（重试到天亮也没用），按长冷却处理。
+		return provider.ErrHardCredit
+	case reCreditExhausted.MatchString(low):
+		// 积分账户耗尽（TM.00001050）：与 benefit 额度同一处置（账号级长冷却 + 换号）。
+		// 不单独归类的话会被下面的 `status == 400 → ErrBadParams` 接走，已耗尽账号
+		// 永远「健康」并被反复挑中。
 		return provider.ErrHardCredit
 	case status == http.StatusTooManyRequests || reStandalone429.MatchString(body):
 		return provider.ErrSoftRate
