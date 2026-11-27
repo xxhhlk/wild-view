@@ -303,7 +303,7 @@ check("明细弹层「已用」合计不受分页影响", detailHTML.includes("�
 check("明细弹层已用合计跳过 info_only / 不可用池", !detailHTML.includes("已用 <b>1559</b>") && !detailHTML.includes("已用 <b>1499</b>"));
 check("明细弹层保留可用小计", detailHTML.includes("可用 <b>340</b>"));
 
-// ---- 场景：临期窗口 1/2/7 的自然日口径（今天算第 1 天）----
+// ---- 场景：自定义临期窗口的自然日口径（今天算第 1 天）----
 // 后端 provider.ExpireWithinDays 按自然日算：days=1 只含今天，days=7 含今天起第 7 天。
 // 前端旧实现用 now + days*24h 的滚动窗口，比后端宽一天（1 天窗口会把明早到期的也算进来），
 // 于是明细里的「临期」角标与卡片上的「临期额度」对不上。
@@ -314,7 +314,7 @@ const utc8Day = (offsetDays) => {
 const expItems = [1, 2, 6, 8].map((off, i) => ({
   name: `D+${off}`, total: 100, used: 0, remain: 10 * (i + 1), expire_at: utc8Day(off), usable: true,
 }));
-for (const [days, want] of [[1, 0], [2, 1], [7, 3]]) {
+for (const [days, want] of [[1, 0], [2, 1], [3, 2], [7, 3], [9, 4]]) {
   T.setState({ ...FAKE_STATE, expiring_days: days });
   T.setDetail("u-exp", { items: expItems.map((it) => ({ ...it })), usable_remain: 100, unusable_remain: 0 });
   T.renderCreditDetail();
@@ -322,6 +322,8 @@ for (const [days, want] of [[1, 0], [2, 1], [7, 3]]) {
   const got = (html.match(/detail-exp-tag/g) || []).length;
   check(`${days} 天窗口的自然日临期数 = ${want}`, got === want, `实际 ${got} 条（明细到期日 D+1/D+2/D+6/D+8）`);
 }
+check("临期阈值使用自定义整数输入框", /<input type="number" id="inExpiring"[^>]*min="1"[^>]*max="365"[^>]*step="1"/.test(html));
+check("前端拒绝非整数及越界临期阈值", raw.includes("Number.isInteger(expDays)") && raw.includes("expDays < 1 || expDays > 365"));
 T.setState(FAKE_STATE);
 
 // ---- 场景 4：app.js 引用的每个 id 都必须在 index.html 里存在 ----// 起因：新增「签到时间选择器」时若只在 app.js 里取 $("timePicker") 而忘了在

@@ -249,7 +249,7 @@ func (s *Scheduler) expiringDays() int {
 	return provider.ExpiringDays
 }
 
-// SetExpiringDays 运行中更新临期展示窗口（面板 1/2/7 天）。
+// SetExpiringDays 运行中更新用户自定义的临期展示窗口。
 //
 // 签到路径会用这个窗口重算 expiring 并写回 pool，所以面板改完必须同步下发，
 // 否则 10:04 那次签到会把它改回硬编码值，面板数字来回跳。
@@ -787,7 +787,7 @@ func (s *Scheduler) checkinOne(uid string) CheckinResult {
 	} else {
 		_, unusable := provider.Summarize(items)
 		// 临期额度（仅展示）与最早到期时刻（Pick 排序键）同一份 items。
-		// 窗口跟随 App 下发的运行期配置（面板 1/2/7 天），不再硬编码。
+		// 窗口跟随 App 下发的运行期配置，不再硬编码。
 		now := time.Now()
 		expiring := provider.ExpiringWithinDays(items, s.expiringDays(), now)
 		earliest, _ := provider.EarliestExpire(items, now)

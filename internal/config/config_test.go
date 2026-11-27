@@ -193,22 +193,24 @@ func TestAdminPasswordAndLoopback(t *testing.T) {
 	}
 }
 
-// TestExpiringThresholdDaysIs127 临期窗口只提供 1/2/7 三档（与上游 R112b 同口径），
-// 历史配置里的旧值（如 72h = 3 天）按「就近取大」归一，避免加载失败。
-func TestExpiringThresholdDaysIs127(t *testing.T) {
+func TestExpiringThresholdDaysCustom(t *testing.T) {
 	cases := []struct {
 		hours     int
 		wantHours int
 		wantDays  int
 	}{
-		{0, 24, 1},   // 缺省
-		{12, 24, 1},  // 低于一天：夹到 1 天
-		{24, 24, 1},  // 1 天
-		{25, 48, 2},  // 就近取大
-		{48, 48, 2},  // 2 天
-		{72, 168, 7}, // 历史值 3 天 → 7 天
+		{0, 24, 1},
+		{-8, 24, 1},
+		{12, 24, 1},
+		{24, 24, 1},
+		{25, 48, 2},
+		{48, 48, 2},
+		{72, 72, 3},
 		{168, 168, 7},
-		{500, 168, 7}, // 超上限：夹到 7 天
+		{500, 504, 21},
+		{8760, 8760, 365},
+		{8761, 8760, 365},
+		{10000, 8760, 365},
 	}
 	for _, tc := range cases {
 		c := Default()

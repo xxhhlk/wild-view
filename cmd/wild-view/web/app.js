@@ -1577,7 +1577,7 @@ function openSettings() {
   // 纯签到 + 开机自启 + 临期阈值
   $("chkCheckinEnabled").checked = !!state.checkin_enabled;
   $("chkAutostart").checked = !!state.autostart;
-  $("selExpiring").value = String(state.expiring_days || 1);
+  $("inExpiring").value = String(state.expiring_days || 1);
   syncListenRisk(); // 按当前监听地址初始化警告条与必填星号
   $("settingsOverlay").classList.remove("hidden");
 }
@@ -1625,6 +1625,11 @@ function asciiOnlyInput(el, onFiltered) {
 }
 
 async function saveSettings() {
+  const expDays = Number($("inExpiring").value);
+  if (!Number.isInteger(expDays) || expDays < 1 || expDays > 365) {
+    toast("临期阈值请输入 1–365 天的整数");
+    return;
+  }
   // 1) 监听地址 + 管理密码（保存即热切换；改密码会使旧会话失效）
   const body = { host: selectedHost(), port: parseInt($("inPort").value, 10) || 0 };
   const adminPass = $("adminPassInput").value.trim();
@@ -1645,8 +1650,7 @@ async function saveSettings() {
     } catch (e) { toast(e.message); closeSettings(); showLogin("管理密码已变更，请重新登录"); return; }
   }
 
-  // 2) 临期阈值（1/2/7 天，独立端点即时生效）
-  const expDays = parseInt($("selExpiring").value, 10) || 1;
+  // 2) 临期阈值（自定义自然日数，独立端点即时生效）
   if (expDays !== (state.expiring_days || 1)) {
     try {
       await api("/api/config/expiring_days", { days: expDays });
